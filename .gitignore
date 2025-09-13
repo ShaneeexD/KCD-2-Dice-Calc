@@ -3,7 +3,7 @@
 ########################################
 
 # Byte-compiled / optimized / DLL files
-*__pycache__/
+__pycache__/    
 *.py[cod]
 *$py.class
 *.pyd
@@ -85,3 +85,10 @@ kcd2_dice_simulation.log
 # Matplotlib cache (sometimes generated)
 .matplotlib/
 .mplconfig/
+
+
+########################################
+# Other
+########################################
+
+INFO.md
