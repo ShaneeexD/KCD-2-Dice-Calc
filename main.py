@@ -15,7 +15,6 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import threading
 
 from dice_data import load_dice_data, get_die_by_name, get_all_dice_names, Die
-from scoring_system import find_optimal_scoring_strategy, get_all_scoring_combinations
 from turn_simulator import find_optimal_dice_combination, DiceSimulator
 
 # Ensure dice data is loaded
@@ -40,13 +39,11 @@ class DiceCalculatorApp:
         self.info_tab = ttk.Frame(self.tab_control)
         self.inventory_tab = ttk.Frame(self.tab_control)
         self.calculator_tab = ttk.Frame(self.tab_control)
-        self.scoring_tab = ttk.Frame(self.tab_control)
         self.strategy_tab = ttk.Frame(self.tab_control)
         
         self.tab_control.add(self.info_tab, text="Dice Information")
         self.tab_control.add(self.inventory_tab, text="Inventory")
         self.tab_control.add(self.calculator_tab, text="Target Calculator")
-        self.tab_control.add(self.scoring_tab, text="Scoring Calculator")
         self.tab_control.add(self.strategy_tab, text="Strategy Calculator")
         
         self.tab_control.pack(expand=1, fill="both")
@@ -58,7 +55,6 @@ class DiceCalculatorApp:
         self.setup_info_tab()
         self.setup_inventory_tab()
         self.setup_calculator_tab()
-        self.setup_scoring_tab()
         self.setup_strategy_tab()
     
     def setup_info_tab(self):
@@ -457,220 +453,6 @@ class DiceCalculatorApp:
         canvas.draw()
         canvas.get_tk_widget().pack(fill="both", expand=True)
         
-    def setup_scoring_tab(self):
-        """Set up the Scoring Calculator tab."""
-        frame = ttk.Frame(self.scoring_tab, padding=PADDING)
-        frame.pack(fill="both", expand=True)
-        
-        # Top frame for inputs
-        input_frame = ttk.LabelFrame(frame, text="Scoring Parameters", padding=PADDING)
-        input_frame.pack(fill="x", pady=(0, 10))
-        
-        # Instructions
-        ttk.Label(input_frame, text="Find the best dice combination for achieving high scores", 
-                 font=("Arial", 11)).grid(row=0, column=0, sticky="w", pady=(0, 10))
-        
-        # Test Mode checkbox
-        self.scoring_test_mode_var = tk.BooleanVar(value=False)
-        scoring_test_mode_cb = ttk.Checkbutton(
-            input_frame,
-            text="Test Mode (Assume 6 of each die)",
-            variable=self.scoring_test_mode_var
-        )
-        scoring_test_mode_cb.grid(row=0, column=1, sticky="e", padx=10)
-        
-        # Number of dice to use
-        dice_count_frame = ttk.Frame(input_frame)
-        dice_count_frame.grid(row=1, column=0, sticky="w", padx=10, pady=5)
-        
-        ttk.Label(dice_count_frame, text="Number of Dice:").pack(side="left", padx=(0, 5))
-        
-        self.scoring_dice_count_var = tk.StringVar(value="6")
-        ttk.Spinbox(
-            dice_count_frame, 
-            from_=1, 
-            to=6, 
-            width=5, 
-            textvariable=self.scoring_dice_count_var
-        ).pack(side="left")
-        
-        # Calculate button
-        ttk.Button(
-            input_frame, 
-            text="Find Best Scoring Combinations", 
-            command=self.calculate_best_scoring_combinations
-        ).grid(row=1, column=1, padx=10)
-        
-        # Bottom frame for results
-        results_frame = ttk.LabelFrame(frame, text="Scoring Combinations", padding=PADDING)
-        results_frame.pack(fill="both", expand=True)
-        
-        # Create a treeview for the results
-        columns = ("rank", "score", "probability", "expected", "combo")
-        self.scoring_results_tree = ttk.Treeview(results_frame, columns=columns, show="headings")
-        
-        # Define column headings
-        self.scoring_results_tree.heading("rank", text="#")
-        self.scoring_results_tree.heading("score", text="Score")
-        self.scoring_results_tree.heading("probability", text="Probability")
-        self.scoring_results_tree.heading("expected", text="Expected Value")
-        self.scoring_results_tree.heading("combo", text="Combination")
-        
-        # Define column widths
-        self.scoring_results_tree.column("rank", width=40, anchor="center")
-        self.scoring_results_tree.column("score", width=80, anchor="center")
-        self.scoring_results_tree.column("probability", width=80, anchor="center")
-        self.scoring_results_tree.column("expected", width=100, anchor="center")
-        self.scoring_results_tree.column("combo", width=400)
-        
-        # Add scrollbars
-        scrollbar_y = ttk.Scrollbar(results_frame, orient="vertical", command=self.scoring_results_tree.yview)
-        self.scoring_results_tree.configure(yscrollcommand=scrollbar_y.set)
-        
-        # Pack the treeview and scrollbar
-        self.scoring_results_tree.pack(side="left", fill="both", expand=True)
-        scrollbar_y.pack(side="right", fill="y")
-        
-        # Frame for details
-        self.scoring_details_frame = ttk.LabelFrame(frame, text="Combination Details", padding=PADDING)
-        self.scoring_details_frame.pack(fill="both", expand=False, pady=10)
-        
-        # Text widget for detailed information
-        self.scoring_details_text = tk.Text(self.scoring_details_frame, height=10, wrap="word")
-        self.scoring_details_text.pack(fill="both", expand=True)
-        
-        # Bind treeview selection event
-        self.scoring_results_tree.bind("<<TreeviewSelect>>", self.on_scoring_combo_selected)
-    
-    def calculate_best_scoring_combinations(self):
-        """Calculate the best scoring combinations based on inventory."""
-        try:
-            # Get number of dice to use
-            dice_count = int(self.scoring_dice_count_var.get())
-            if dice_count < 1 or dice_count > 6:
-                raise ValueError("Dice count must be between 1 and 6")
-            
-            # Check if test mode is enabled
-            if self.scoring_test_mode_var.get():
-                # Use all dice with quantity 6
-                usable_dice = []
-                for name in get_all_dice_names():
-                    die = get_die_by_name(name)
-                    usable_dice.extend([die] * 6)  # 6 of each die in test mode
-            else:
-                # Use inventory
-                available_dice = {name: int(self.quantity_vars[name].get()) for name in self.quantity_vars
-                                if int(self.quantity_vars[name].get()) > 0}
-                
-                if not available_dice:
-                    messagebox.showwarning("Empty Inventory", "You don't have any dice in your inventory. "
-                                                          "Please add some in the Inventory tab.")
-                    return
-                
-                # Get the list of dice we can use (respecting quantity)
-                usable_dice = []
-                for name, quantity in available_dice.items():
-                    die = get_die_by_name(name)
-                    usable_dice.extend([die] * quantity)
-            
-            # If we have fewer dice than requested, adjust
-            if len(usable_dice) < dice_count:
-                messagebox.showinfo("Insufficient Dice", f"You only have {len(usable_dice)} dice available. "
-                                                    f"Calculation will use all available dice.")
-                dice_count = len(usable_dice)
-            
-            # Find optimal scoring strategies
-            results = find_optimal_scoring_strategy(usable_dice, dice_count)
-            
-            # Clear existing results
-            for item in self.scoring_results_tree.get_children():
-                self.scoring_results_tree.delete(item)
-            
-            # Display results in the treeview
-            for i, (score, probability, dice_combo, scoring_type, description, expected_value) in enumerate(results[:20], 1):
-                # Format the data
-                score_str = f"{score:,}"
-                prob_str = f"{probability:.2f}%"
-                expected_str = f"{expected_value:.2f}"
-                
-                # Insert into treeview
-                self.scoring_results_tree.insert(
-                    "", "end", 
-                    values=(i, score_str, prob_str, expected_str, description),
-                    tags=(scoring_type,)
-                )
-            
-            # Select the first item
-            if self.scoring_results_tree.get_children():
-                first_item = self.scoring_results_tree.get_children()[0]
-                self.scoring_results_tree.selection_set(first_item)
-                self.scoring_results_tree.focus(first_item)
-                self.on_scoring_combo_selected(None)  # Update details for first item
-            
-        except ValueError as e:
-            messagebox.showerror("Input Error", str(e))
-    
-    def on_scoring_combo_selected(self, event):
-        """Handle selection of a scoring combination from the treeview."""
-        # Clear previous details
-        self.scoring_details_text.delete(1.0, tk.END)
-        
-        selection = self.scoring_results_tree.selection()
-        if not selection:
-            return
-        
-        # Get selected item
-        item = selection[0]
-        values = self.scoring_results_tree.item(item, "values")
-        scoring_type = self.scoring_results_tree.item(item, "tags")[0]
-        
-        # Get index in results list
-        index = int(values[0]) - 1  # Rank is 1-based, index is 0-based
-        
-        try:
-            # Get number of dice to use
-            dice_count = int(self.scoring_dice_count_var.get())
-            
-            # Check if test mode is enabled
-            if self.scoring_test_mode_var.get():
-                # Use all dice with quantity 6
-                usable_dice = []
-                for name in get_all_dice_names():
-                    die = get_die_by_name(name)
-                    usable_dice.extend([die] * 6)  # 6 of each die in test mode
-            else:
-                # Get dice from inventory again
-                available_dice = {name: int(self.quantity_vars[name].get()) for name in self.quantity_vars
-                                if int(self.quantity_vars[name].get()) > 0}
-                
-                usable_dice = []
-                for name, quantity in available_dice.items():
-                    die = get_die_by_name(name)
-                    usable_dice.extend([die] * quantity)
-            
-            # If we have fewer dice than requested, adjust
-            if len(usable_dice) < dice_count:
-                dice_count = len(usable_dice)
-            
-            # Recalculate to get dice combinations
-            results = find_optimal_scoring_strategy(usable_dice, dice_count)
-            
-            if index < len(results):
-                score, probability, dice_combo, scoring_type, description, expected_value = results[index]
-                
-                # Display detailed information
-                self.scoring_details_text.insert(tk.END, f"Scoring Combination: {description}\n\n")
-                self.scoring_details_text.insert(tk.END, f"Score: {score:,}\n")
-                self.scoring_details_text.insert(tk.END, f"Probability: {probability:.4f}%\n")
-                self.scoring_details_text.insert(tk.END, f"Expected Value: {expected_value:.2f}\n\n")
-                
-                self.scoring_details_text.insert(tk.END, "Recommended Dice:\n")
-                for i, die in enumerate(dice_combo, 1):
-                    self.scoring_details_text.insert(tk.END, f"Die {i}: {die.name} - "
-                                                    f"(Weight distribution: {die.weights})\n")
-        
-        except (ValueError, IndexError):
-            self.scoring_details_text.insert(tk.END, "Error retrieving combination details.")
             
     # Keeping these for backward compatibility
     def find_best_dice_combination(self, available_dice, dice_count, targets, weights):
