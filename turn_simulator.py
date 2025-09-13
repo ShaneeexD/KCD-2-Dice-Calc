@@ -7,6 +7,7 @@ import random
 import itertools
 import logging
 import time
+import os
 from collections import Counter, defaultdict
 from typing import List, Dict, Tuple, Set, Optional, Callable
 
@@ -935,39 +936,45 @@ def find_optimal_dice_combination(available_dice: List[Die], num_dice: int = 6,
     # Simulate each combination
     logger.info(f"Testing {len(combinations_to_test)} dice combinations")
     results = []
-    
     total_combos = len(combinations_to_test)
     start_percent = max(30, int(progress))  # ensure we start at least at 30% after preparation
     end_percent = 90
-    for idx, combo in enumerate(combinations_to_test):
-        logger.info(f"Testing combination {idx+1}/{len(combinations_to_test)}: {combo['name']}")
-        
-        # Update simulator with current dice set
-        simulator.dice = combo["dice"]
-        
-        # Run simulation
-        # Wrapper to map per-simulation progress into overall %
-        def combo_progress(sim_done: int, sim_total: int):
-            if progress_callback and total_combos > 0 and sim_total > 0:
-                frac = (idx + (sim_done / sim_total)) / total_combos
+
+    # Threaded evaluation to speed up computation
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    workers = max(1, (os.cpu_count() or 4) - 1)
+
+    def eval_combo(idx_combo):
+        idx, combo = idx_combo
+        local_sim = DiceSimulator([], num_simulations)
+        # Inner progress is omitted to reduce contention
+        res = local_sim.simulate_dice_combination(combo["dice"], num_simulations // 2, None)
+        res["name"] = combo["name"]
+        res["dice_combination"] = Counter(d.name for d in combo["dice"])  # raw composition
+        # Composite rank: EV, EV per roll, reliability
+        ev = res.get("expected_value", 0.0)
+        bust = res.get("bust_rate", 0.0)
+        avg_rolls = max(1e-9, res.get("avg_rolls", 1.0))
+        rate = ev / avg_rolls
+        reliability = (1.0 - bust) * ev
+        res["rank_score"] = 0.6 * ev + 0.3 * rate + 0.1 * reliability
+        return idx, res
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {executor.submit(eval_combo, (i, combo)): i for i, combo in enumerate(combinations_to_test)}
+        for n, fut in enumerate(as_completed(futures), start=1):
+            idx, sim_result = fut.result()
+            results.append(sim_result)
+            # Update progress on completion of each combo
+            if progress_callback and total_combos > 0:
+                frac = n / total_combos
                 percent = start_percent + int(frac * (end_percent - start_percent))
                 progress_callback(min(end_percent, max(start_percent, percent)))
-
-        sim_result = simulator.simulate_dice_combination(combo["dice"], num_simulations // 2, combo_progress)  # Use fewer sims per combo
-        sim_result["name"] = combo["name"]
-        sim_result["dice_combination"] = Counter(d.name for d in combo["dice"])  # raw composition
-        results.append(sim_result)
-        
-        # Update progress based on fraction of combos done
-        if progress_callback and total_combos > 0:
-            frac = (idx + 1) / total_combos
-            percent = start_percent + int(frac * (end_percent - start_percent))
-            progress_callback(min(end_percent, max(start_percent, percent)))
-        if status_callback:
-            status_callback(idx+1, total_combos, time.time() - start_time)
+            if status_callback:
+                status_callback(n, total_combos, time.time() - start_time)
     
-    # Sort by expected value
-    results.sort(key=lambda x: x["expected_value"], reverse=True)
+    # Sort by composite rank (EV + EV/roll + reliability)
+    results.sort(key=lambda x: x.get("rank_score", 0.0), reverse=True)
     
     # Return the best result
     if results:

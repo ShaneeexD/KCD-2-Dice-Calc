@@ -558,7 +558,7 @@ class DiceCalculatorApp:
         strategies_frame.pack(fill="both", expand=True)
         
         # Create a treeview for strategy comparison
-        columns = ("strategy", "expected_score", "bust_rate", "avg_rolls")
+        columns = ("strategy", "expected_score", "bust_rate", "avg_rolls", "rank_score")
         self.strategy_tree = ttk.Treeview(strategies_frame, columns=columns, show="headings")
         
         # Define column headings
@@ -566,12 +566,14 @@ class DiceCalculatorApp:
         self.strategy_tree.heading("expected_score", text="Expected Score")
         self.strategy_tree.heading("bust_rate", text="Bust Rate")
         self.strategy_tree.heading("avg_rolls", text="Avg. Rolls")
+        self.strategy_tree.heading("rank_score", text="Rank Score")
         
         # Define column widths
         self.strategy_tree.column("strategy", width=150)
-        self.strategy_tree.column("expected_score", width=100, anchor="center")
-        self.strategy_tree.column("bust_rate", width=100, anchor="center")
-        self.strategy_tree.column("avg_rolls", width=100, anchor="center")
+        self.strategy_tree.column("expected_score", width=110, anchor="center")
+        self.strategy_tree.column("bust_rate", width=90, anchor="center")
+        self.strategy_tree.column("avg_rolls", width=90, anchor="center")
+        self.strategy_tree.column("rank_score", width=100, anchor="center")
         
         # Add scrollbars
         scrollbar_y = ttk.Scrollbar(strategies_frame, orient="vertical", command=self.strategy_tree.yview)
@@ -756,7 +758,8 @@ class DiceCalculatorApp:
                     combo.get("name", "Unknown"),
                     f"{combo.get('expected_value', 0):.2f}",
                     f"{combo.get('bust_rate', 0)*100:.1f}%",
-                    f"{combo.get('avg_rolls', 0):.2f}"
+                    f"{combo.get('avg_rolls', 0):.2f}",
+                    f"{combo.get('rank_score', 0):.2f}"
                 ),
                 tags=(str(i),)
             )
