@@ -7,6 +7,8 @@ A calculator and information app for KCD 2 dice that allows users to:
 """
 
 import os
+from datetime import datetime
+import csv
 import json
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -772,6 +774,54 @@ class DiceCalculatorApp:
             self.strategy_tree.focus(first_item)
             self.on_strategy_selected(None)  # Update details for first item
         
+        # Save top 100 combinations to a timestamped text file and CSV (Top100- prefix) in app directory
+        try:
+            combos = result.get("all_combinations", [])
+            if combos:
+                top = combos[:100]
+                lines = []
+                lines.append("KCD2 Dice Calculator - Top 100 Combinations\n")
+                lines.append(f"Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+                for i, item in enumerate(top, start=1):
+                    name = item.get("name", "<unknown>")
+                    ev = item.get("expected_value", 0.0)
+                    bust = item.get("bust_rate", 0.0)
+                    avg_rolls = item.get("avg_rolls", 0.0)
+                    rank = item.get("rank_score", 0.0)
+                    comp = item.get("dice_combination", {})
+                    comp_str = ", ".join(f"{v}x {k}" for k, v in comp.items()) if isinstance(comp, dict) else str(comp)
+                    lines.append(f"{i:3d}. {name}\n")
+                    lines.append(f"     EV: {ev:.2f} | Bust: {bust:.2%} | Avg Rolls: {avg_rolls:.2f} | Rank: {rank:.3f}\n")
+                    lines.append(f"     Composition: {comp_str}\n\n")
+
+                base_dir = os.path.dirname(os.path.abspath(__file__))
+                filename = datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + ".txt"
+                out_path = os.path.join(base_dir, filename)
+                with open(out_path, "w", encoding="utf-8") as f:
+                    f.writelines(lines)
+                
+                # Write CSV with Top100- prefix
+                csv_name = "Top100-" + datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + ".csv"
+                csv_path = os.path.join(base_dir, csv_name)
+                with open(csv_path, "w", newline="", encoding="utf-8") as csvfile:
+                    writer = csv.writer(csvfile)
+                    writer.writerow(["rank", "name", "expected_value", "bust_rate", "avg_rolls", "rank_score", "composition"])
+                    for i, item in enumerate(top, start=1):
+                        name = item.get("name", "<unknown>")
+                        ev = item.get("expected_value", 0.0)
+                        bust = item.get("bust_rate", 0.0)
+                        avg_rolls = item.get("avg_rolls", 0.0)
+                        rank = item.get("rank_score", 0.0)
+                        comp = item.get("dice_combination", {})
+                        comp_str = ", ".join(f"{v}x {k}" for k, v in comp.items()) if isinstance(comp, dict) else str(comp)
+                        writer.writerow([i, name, f"{ev:.4f}", f"{bust:.4f}", f"{avg_rolls:.4f}", f"{rank:.4f}", comp_str])
+                # Let the user know where it was saved
+                self.strategy_results_text.insert(tk.END, f"\nSaved top 100 combinations to: {out_path}\n")
+                self.strategy_results_text.insert(tk.END, f"Saved CSV: {csv_path}\n")
+        except Exception as e:
+            # Non-fatal; continue updating UI
+            self.strategy_results_text.insert(tk.END, f"\nWarning: could not save results file ({e})\n")
+
         # Re-enable the calculate button
         self.calculate_button.config(state="normal")
         
