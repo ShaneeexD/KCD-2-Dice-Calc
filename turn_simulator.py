@@ -11,8 +11,18 @@ import os
 from collections import Counter, defaultdict
 from typing import List, Dict, Tuple, Set, Optional, Callable
 
-from dice_data import Die
-from scoring_system import score_dice_roll
+from dice_data import Die, get_die_by_name
+# Optional high-performance dependencies
+try:
+    import numpy as np  # For fast sampling and arrays
+except Exception:
+    np = None
+
+try:
+    from scoring_system import score_dice_roll, _score_dice_roll_jit  # JIT-compiled scoring (if available)
+except Exception:
+    from scoring_system import score_dice_roll  # Fallback to Python scoring only
+    _score_dice_roll_jit = None
 
 # Set up logging
 logging.basicConfig(level=logging.INFO,
@@ -22,6 +32,37 @@ logging.basicConfig(level=logging.INFO,
                         logging.StreamHandler()
                     ])
 logger = logging.getLogger('dice_simulator')
+
+# Concurrency for cross-combination evaluation
+from concurrent.futures import ProcessPoolExecutor, as_completed
+
+def _eval_combo_worker(payload):
+    """Process-safe worker to evaluate a single dice combination.
+    Payload keys: name, dice_names, sims
+    """
+    try:
+        name = payload["name"]
+        dice_names = payload["dice_names"]
+        sims = payload["sims"]
+        # Reconstruct dice objects in the worker
+        dice_objs = [get_die_by_name(n) for n in dice_names]
+        # Reduce logging noise in worker
+        logging.getLogger('dice_simulator').setLevel(logging.WARNING)
+        sim = DiceSimulator([], sims)
+        # Keep per-combo sims modest in workers to improve throughput
+        sims = max(50, min(200, sims))
+        res = sim.simulate_dice_combination(dice_objs, sims, None, diagnostics=False)
+        res["name"] = name
+        res["dice_combination"] = Counter(n for n in dice_names)
+        ev = res.get("expected_value", 0.0)
+        bust = res.get("bust_rate", 0.0)
+        avg_rolls = max(1e-9, res.get("avg_rolls", 1.0))
+        rate = ev / avg_rolls
+        reliability = (1.0 - bust) * ev
+        res["rank_score"] = 0.6 * ev + 0.3 * rate + 0.1 * reliability
+        return res
+    except Exception as e:
+        return {"error": str(e), "name": payload.get("name", "Unknown")}
 
 class DiceSimulator:
     """Simulates dice rolls in the KCD2 dice game."""
@@ -40,19 +81,22 @@ class DiceSimulator:
     def _roll_dice(self, dice: List[Die]) -> List[int]:
         """
         Simulate rolling a set of dice based on their probabilities.
-        
-        Args:
-            dice: List of Die objects to roll
-            
-        Returns:
-            List of rolled values (1-6)
+        Uses NumPy for sampling when available, otherwise falls back to random.choices.
         """
         result = []
+        if np is not None:
+            # Fast per-die sampling using NumPy
+            sides = np.arange(1, 7, dtype=np.int64)
+            for die in dice:
+                w = np.array(die.weights, dtype=np.float64)
+                p = w / w.sum()
+                val = int(np.random.choice(sides, p=p))
+                result.append(val)
+            return result
+        # Fallback: pure Python sampling
         for die in dice:
-            # Roll based on the die's probabilities
-            sides = list(range(1, 7))
-            weights = die.weights
-            result.append(random.choices(sides, weights=weights)[0])
+            sides = [1, 2, 3, 4, 5, 6]
+            result.append(random.choices(sides, weights=die.weights)[0])
         return result
     
     def _identify_all_keep_options(self, roll: List[int]) -> List[Tuple[Set[int], int, str]]:
@@ -71,8 +115,23 @@ class DiceSimulator:
         
         def _is_pure_scoring_set(values: List[int]) -> bool:
             """Return True if every die in values contributes to the score.
-            We test by removing each die and ensuring the score strictly decreases.
+            Prefer fast JIT scoring when available, else fall back to Python scorer.
             """
+            if _score_dice_roll_jit is not None and np is not None:
+                arr = np.array(values, dtype=np.int64)
+                full_score = int(_score_dice_roll_jit(arr))
+                if full_score <= 0:
+                    return False
+                n = arr.size
+                for j in range(n):
+                    if n == 1:
+                        break
+                    tmp = np.delete(arr, j)
+                    tmp_score = int(_score_dice_roll_jit(tmp))
+                    if tmp_score >= full_score:
+                        return False
+                return True
+            # Fallback to descriptive Python scorer
             full_score, _, _ = score_dice_roll(values)
             if full_score <= 0:
                 return False
@@ -80,7 +139,6 @@ class DiceSimulator:
                 tmp = values[:j] + values[j+1:]
                 tmp_score, _, _ = score_dice_roll(tmp)
                 if tmp_score >= full_score:
-                    # This die did not contribute (or was redundant)
                     return False
             return True
 
@@ -89,10 +147,15 @@ class DiceSimulator:
             for indices in itertools.combinations(range(n), keep_size):
                 indices_set = set(indices)
                 keep_values = [roll[i] for i in indices]
-                score, combo_parts, desc = score_dice_roll(keep_values)
-                
+                # Fast raw scoring when JIT is available; otherwise use Python scorer
+                if _score_dice_roll_jit is not None and np is not None:
+                    score = int(_score_dice_roll_jit(np.array(keep_values, dtype=np.int64)))
+                else:
+                    score, _, _ = score_dice_roll(keep_values)
                 # Only add if it's a valid scoring option
                 if score > 0 and _is_pure_scoring_set(keep_values):
+                    # Compute human-friendly description using Python scorer
+                    _, _, desc = score_dice_roll(keep_values)
                     options.append((indices_set, score, desc))
         
         # Sort by score (descending)
@@ -348,7 +411,7 @@ class DiceSimulator:
             else:
                 logger.error(f"  ERROR: No scoring options found for {roll}!")
     
-    def simulate_dice_combination(self, dice: List[Die], num_simulations: int = 1000, progress_fn: Optional[Callable[[int, int], None]] = None) -> Dict:
+    def simulate_dice_combination(self, dice: List[Die], num_simulations: int = 1000, progress_fn: Optional[Callable[[int, int], None]] = None, diagnostics: bool = True) -> Dict:
         """
         Simulate multiple turns with a given dice combination using optimal choices.
         
@@ -359,14 +422,14 @@ class DiceSimulator:
         Returns:
             Dictionary with statistics about the dice combination performance
         """
-        # First run a diagnostic test to verify scoring is working
-        self._test_scoring()
-        
-        # Log the dice we're testing
-        logger.info(f"Simulating {num_simulations} turns with {len(dice)} dice")
+        # Optional diagnostic: only when explicitly enabled (avoid in workers)
+        # Prepare dice counts for return value
         dice_names = [die.name for die in dice]
         dice_counts = Counter(dice_names)
-        logger.info(f"Dice set: {dict(dice_counts)}")
+        if diagnostics:
+            self._test_scoring()
+            logger.info(f"Simulating {num_simulations} turns with {len(dice)} dice")
+            logger.info(f"Dice set: {dict(dice_counts)}")
         
         start_time = time.time()
         
@@ -382,8 +445,8 @@ class DiceSimulator:
         progress_intervals = [int(num_simulations * p) for p in [0.25, 0.5, 0.75]]
         
         for i in range(num_simulations):
-            # Log progress periodically
-            if i in progress_intervals or (i < 10) or (i % 100 == 0):
+            # Light progress logging
+            if diagnostics and (i in progress_intervals or (i % 500 == 0)):
                 progress_pct = (i / num_simulations) * 100
                 elapsed = time.time() - start_time
                 logger.info(f"Simulation {i}/{num_simulations} ({progress_pct:.1f}%). Elapsed: {elapsed:.1f}s")
@@ -395,7 +458,7 @@ class DiceSimulator:
                     pass
             
             # Run a single turn simulation with diagnostic info for early turns
-            debug = i < 3  # Detailed debug for first few turns
+            debug = diagnostics and (i < 1)  # Minimal debug when diagnostics enabled
             score, did_bust, num_rolls, choices = self._simulate_turn_with_optimal_choices(dice, debug)
             
             # Update statistics
@@ -697,29 +760,15 @@ class DiceSimulator:
         elapsed_time = time.time() - selection_start_time
         logger.info(f"Dice selection simulation completed in {elapsed_time:.2f} seconds")
         
-        # Sort by expected value and return top results
-        results.sort(key=lambda x: x["expected_value"], reverse=True)
-        return results[:10]  # Return top 10 options
-
-
 def find_optimal_dice_combination(available_dice: List[Die], num_dice: int = 6, 
                              num_simulations: int = 1000,
                              progress_callback: Optional[Callable[[int], None]] = None,
                              exhaustive: bool = False,
-                             status_callback: Optional[Callable[[int, int, float], None]] = None) -> Dict:
+                             status_callback: Optional[Callable[[int, int, float], None]] = None,
+                             max_combos: int = 5000) -> Dict:
     """
     Find the optimal dice combination for maximizing expected score.
     Uses direct simulation of dice rolls with optimal player choices at each step.
-    
-    Args:
-        available_dice: List of all available Die objects
-        num_dice: Number of dice to use in the game
-        num_simulations: Number of simulations to run
-        progress_callback: Optional callback function to report progress percentage
-        exhaustive: If True, test all possible dice combinations (warning: may be very slow)
-        
-    Returns:
-        Dictionary with the best dice combination and performance statistics
     """
     logger.info(f"Starting optimal dice combination search with {len(available_dice)} available dice")
     logger.info(f"Will test combinations of {num_dice} dice using {num_simulations} simulations each")
@@ -828,6 +877,12 @@ def find_optimal_dice_combination(available_dice: List[Die], num_dice: int = 6,
                     "name": combo_name
                 })
         
+        # Cap the number of combinations to keep runtime bounded (only if max_combos > 0)
+        if max_combos and max_combos > 0 and len(combinations_to_test) > max_combos:
+            logger.info(f"Capping combinations from {len(combinations_to_test):,} to {max_combos:,} for performance")
+            # Uniformly sample without replacement
+            import random as _r
+            combinations_to_test = _r.sample(combinations_to_test, max_combos)
         logger.info(f"Generated {len(combinations_to_test)} valid combinations to test")
     else:
         # SMART SAMPLING: Test specific promising combinations
@@ -940,38 +995,63 @@ def find_optimal_dice_combination(available_dice: List[Die], num_dice: int = 6,
     start_percent = max(30, int(progress))  # ensure we start at least at 30% after preparation
     end_percent = 90
 
-    # Threaded evaluation to speed up computation
-    from concurrent.futures import ThreadPoolExecutor, as_completed
     workers = max(1, (os.cpu_count() or 4) - 1)
 
-    def eval_combo(idx_combo):
-        idx, combo = idx_combo
-        local_sim = DiceSimulator([], num_simulations)
-        # Inner progress is omitted to reduce contention
-        res = local_sim.simulate_dice_combination(combo["dice"], num_simulations // 2, None)
-        res["name"] = combo["name"]
-        res["dice_combination"] = Counter(d.name for d in combo["dice"])  # raw composition
-        # Composite rank: EV, EV per roll, reliability
-        ev = res.get("expected_value", 0.0)
-        bust = res.get("bust_rate", 0.0)
-        avg_rolls = max(1e-9, res.get("avg_rolls", 1.0))
-        rate = ev / avg_rolls
-        reliability = (1.0 - bust) * ev
-        res["rank_score"] = 0.6 * ev + 0.3 * rate + 0.1 * reliability
-        return idx, res
+    # Acceleration log + JIT warm-up
+    logger.info(f"Acceleration: NumPy={'on' if np is not None else 'off'}, "
+                f"NumbaJIT={'on' if _score_dice_roll_jit else 'off'}")
+    if _score_dice_roll_jit is not None and np is not None:
+        t0 = time.time()
+        _ = _score_dice_roll_jit(np.array([1,2,3,4,5,6], dtype=np.int64))
+        logger.info(f"JIT warm-up took {time.time() - t0:.2f}s")
 
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = {executor.submit(eval_combo, (i, combo)): i for i, combo in enumerate(combinations_to_test)}
-        for n, fut in enumerate(as_completed(futures), start=1):
-            idx, sim_result = fut.result()
-            results.append(sim_result)
-            # Update progress on completion of each combo
-            if progress_callback and total_combos > 0:
-                frac = n / total_combos
-                percent = start_percent + int(frac * (end_percent - start_percent))
-                progress_callback(min(end_percent, max(start_percent, percent)))
-            if status_callback:
-                status_callback(n, total_combos, time.time() - start_time)
+    # Build payloads for processes to avoid pickling large objects
+    payloads = [
+        {
+            "name": combo["name"],
+            "dice_names": [d.name for d in combo["dice"]],
+            "sims": max(1, num_simulations // 2),
+        }
+        for combo in combinations_to_test
+    ]
+
+    # Stream submissions to keep memory and scheduler pressure low
+    max_in_flight = max(workers * 4, 8)
+    submitted = 0
+    completed = 0
+    in_flight = {}
+    with ProcessPoolExecutor(max_workers=workers) as executor:
+        # Prime the pool
+        while submitted < len(payloads) and len(in_flight) < max_in_flight:
+            f = executor.submit(_eval_combo_worker, payloads[submitted])
+            in_flight[f] = submitted
+            submitted += 1
+        # Process as they complete and keep submitting
+        while in_flight:
+            for fut in as_completed(list(in_flight.keys())):
+                in_flight.pop(fut, None)
+                completed += 1
+                try:
+                    res = fut.result()
+                except Exception as e:
+                    logger.warning(f"Worker raised exception: {e}")
+                    res = {"error": str(e)}
+                if isinstance(res, dict) and "error" in res:
+                    logger.warning(f"Worker error for {res.get('name','Unknown')}: {res['error']}")
+                else:
+                    results.append(res)
+                # Update progress
+                if progress_callback and total_combos > 0:
+                    frac = completed / total_combos
+                    percent = start_percent + int(frac * (end_percent - start_percent))
+                    progress_callback(min(end_percent, max(start_percent, percent)))
+                if status_callback:
+                    status_callback(completed, total_combos, time.time() - start_time)
+                # Keep the pipeline full
+                while submitted < len(payloads) and len(in_flight) < max_in_flight:
+                    f = executor.submit(_eval_combo_worker, payloads[submitted])
+                    in_flight[f] = submitted
+                    submitted += 1
     
     # Sort by composite rank (EV + EV/roll + reliability)
     results.sort(key=lambda x: x.get("rank_score", 0.0), reverse=True)

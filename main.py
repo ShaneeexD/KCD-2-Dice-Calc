@@ -718,7 +718,8 @@ class DiceCalculatorApp:
                 num_simulations,
                 progress_callback,
                 exhaustive_mode,
-                status_callback
+                status_callback,
+                max_combos=0  # 0 disables capping; test all combinations
             )
             
             # Update the UI on the main thread
