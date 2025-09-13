@@ -14,7 +14,7 @@ SCORING_RULES = {
     'partial_straight_1': 500,   # Partial straight (1, 2, 3, 4, 5)
     'partial_straight_2': 750,   # Partial straight (2, 3, 4, 5, 6)
     'full_straight': 1500,       # Full straight (1, 2, 3, 4, 5, 6)
-    'three_ones': 1000,  # Three 1s
+    'three_1': 1000,  # Three 1s - changed from three_ones to be consistent
     'three_2': 200,      # Three 2s
     'three_3': 300,      # Three 3s
     'three_4': 400,      # Three 4s
@@ -113,8 +113,8 @@ def score_dice_roll(dice_values):
             if count >= 3:
                 # Calculate score for three or more of a kind
                 if value == 1:
-                    base_score = SCORING_RULES['three_ones']
-                    combo_key = 'three_ones'
+                    base_score = SCORING_RULES['three_1']
+                    combo_key = 'three_1'
                     combo_desc = 'Three 1s'
                 else:
                     base_score = SCORING_RULES[f'three_{value}']
