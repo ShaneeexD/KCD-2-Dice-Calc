@@ -7,6 +7,17 @@ import itertools
 import random
 from collections import Counter
 
+# Optional acceleration
+try:
+    import numpy as np  # type: ignore
+    from numba import njit, int64  # type: ignore
+    _NUMBA_AVAILABLE = True
+except Exception:  # pragma: no cover
+    np = None  # type: ignore
+    njit = None  # type: ignore
+    int64 = None  # type: ignore
+    _NUMBA_AVAILABLE = False
+
 # Scoring rules as per SCORING.md
 SCORING_RULES = {
     'single_1': 100,     # Single 1
@@ -84,7 +95,7 @@ def score_dice_roll(dice_values):
         desc = 'Full straight (1, 2, 3, 4, 5, 6)'
         remaining_dice = []  # All dice used
         return total_score, combinations, desc
-        
+    
     if set([1, 2, 3, 4, 5]).issubset(set(dice_values)):
         score = SCORING_RULES['partial_straight_1']
         total_score += score
@@ -178,6 +189,100 @@ def score_dice_roll(dice_values):
         return 0, [], 'No scoring combination'
     
     return total_score, combinations, desc
+
+# ---------------------------------------------------------------------------
+# Optional Numba-accelerated scoring (numeric score only)
+# ---------------------------------------------------------------------------
+
+if _NUMBA_AVAILABLE:
+    @njit(cache=True)
+    def _score_dice_roll_numba(arr):  # type: ignore
+        # arr is int64[:] with values in 1..6
+        n = arr.size
+        counts = np.zeros(7, dtype=np.int64)
+        for i in range(n):
+            v = arr[i]
+            if v < 1 or v > 6:
+                continue
+            counts[v] += 1
+
+        total = 0
+
+        # Full straight uses all dice (1..6 present) and only meaningful for 6 dice
+        full = 1
+        for v in range(1, 7):
+            if counts[v] == 0:
+                full = 0
+                break
+        if full == 1 and n == 6:
+            return 1500
+
+        # Partial straights (consume those dice)
+        # 1-5 => 500, 2-6 => 750
+        p1 = 1
+        for v in range(1, 6):
+            if counts[v] == 0:
+                p1 = 0
+                break
+        if p1 == 1:
+            total += 500
+            for v in range(1, 6):
+                counts[v] -= 1
+        else:
+            p2 = 1
+            for v in range(2, 7):
+                if counts[v] == 0:
+                    p2 = 0
+                    break
+            if p2 == 1:
+                total += 750
+                for v in range(2, 7):
+                    counts[v] -= 1
+
+        # Three or more of a kind, process high to low
+        for v in range(6, 0, -1):
+            c = counts[v]
+            if c >= 3:
+                if v == 1:
+                    base = 1000
+                else:
+                    base = v * 100
+                if c > 3:
+                    # multiplier = 2 ** (c - 3)
+                    shift = c - 3
+                    mult = 1
+                    for _ in range(shift):
+                        mult = mult * 2
+                    score = base * mult
+                else:
+                    score = base
+                total += score
+                counts[v] = 0
+
+        # Singles: 1s and 5s
+        if counts[1] > 0:
+            total += counts[1] * 100
+            counts[1] = 0
+        if counts[5] > 0:
+            total += counts[5] * 50
+            counts[5] = 0
+
+        return total
+
+    def _score_dice_roll_jit(arr):
+        """Public accelerated scorer used by the simulator hot loops.
+        Accepts a numpy int64 array and returns the numeric score (int).
+        If arr is not an ndarray, attempts to convert.
+        """
+        if not isinstance(arr, np.ndarray):
+            arr = np.asarray(arr, dtype=np.int64)
+        else:
+            if arr.dtype != np.int64:
+                arr = arr.astype(np.int64)
+        return int(_score_dice_roll_numba(arr))
+else:
+    # Fallback when numba/numpy is not available
+    _score_dice_roll_jit = None  # type: ignore
 
 def calculate_dice_roll_probability(dice, target_values):
     """
