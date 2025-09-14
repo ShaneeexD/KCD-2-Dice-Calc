@@ -71,6 +71,14 @@ class DiceSimulator:
         """Initialize the simulator with a dice set and simulation count."""
         self.dice = dice
         self.num_simulations = num_simulations
+        # Optional banking constraint (used by Single Combo UI)
+        # If set, within the first `bank_min_applies_first_n_rolls` rolls of a turn,
+        # do not allow banking unless current_total >= bank_min_value
+        self.bank_min_value: Optional[int] = None
+        self.bank_min_applies_first_n_rolls: Optional[int] = None
+        # If True, when a keep uses all dice (i.e., remaining_dice == 0), do not allow banking
+        # immediately after that keep. The turn will refresh dice and continue.
+        self.no_bank_on_clear: bool = False
 
     def _format_combo_name(self, dice_list: List[Die]) -> str:
         """Return a normalized 'raw' composition string like '3x Weighted die, 2x Lucky Die, 1x Odd die'."""
@@ -162,7 +170,7 @@ class DiceSimulator:
         options.sort(key=lambda x: x[1], reverse=True)
         return options
         
-    def _find_optimal_choices(self, roll: List[int], dice_left: int, current_total: int) -> List[Tuple[Set[int], int, float, str]]:
+    def _find_optimal_choices(self, roll: List[int], dice_left: int, current_total: int, roll_index: int) -> List[Tuple[Set[int], int, float, str]]:
         """
         Find all valid keep options with their expected value for the next roll.
         
@@ -170,6 +178,7 @@ class DiceSimulator:
             roll: The current roll values
             dice_left: Number of dice in total remaining (including this roll)
             current_total: Current accumulated score this turn (used for bank option)
+            roll_index: The current roll index (1-based)
             
         Returns:
             List of (indices_to_keep, immediate_score, expected_value, description) tuples
@@ -206,11 +215,29 @@ class DiceSimulator:
                 expected_value += 150  # Bonus for getting all dice back
             
             enhanced_options.append((indices, score, expected_value, desc))
+
+            # Also add an option to "Bank after keep" (i.e., take these points and end the turn now)
+            # Respect the minimum bank rule based on the total AFTER keeping this set
+            allow_bank_after_keep = True
+            # If configured to avoid banking when clearing all dice, suppress bank-after-keep
+            if self.no_bank_on_clear and remaining_dice == 0:
+                allow_bank_after_keep = False
+            if self.bank_min_value is not None and self.bank_min_applies_first_n_rolls is not None:
+                if roll_index <= self.bank_min_applies_first_n_rolls and (current_total + score) < self.bank_min_value:
+                    allow_bank_after_keep = False
+            if allow_bank_after_keep:
+                bank_ev = float(current_total + score)
+                enhanced_options.append((indices, score, bank_ev, "Bank after keep"))
             
         # Always include a 'Bank now' option that represents stopping this turn
-        # Use an empty indices set to indicate banking
-        enhanced_options.append((set(), 0, float(current_total), "Bank now"))
-
+        # Use an empty indices set to indicate banking, unless a min-bank rule suppresses it
+        allow_bank = True
+        if self.bank_min_value is not None and self.bank_min_applies_first_n_rolls is not None:
+            if roll_index <= self.bank_min_applies_first_n_rolls and current_total < self.bank_min_value:
+                allow_bank = False
+        if allow_bank:
+            enhanced_options.append((set(), 0, float(current_total), "Bank now"))
+        
         # Sort by expected value
         enhanced_options.sort(key=lambda x: x[2], reverse=True)
         return enhanced_options
@@ -313,7 +340,8 @@ class DiceSimulator:
                 logger.info(f"DEBUG: Dice used: {Counter(dice_names)}")
             
             # Get all options with their expected values (including 'Bank now')
-            options = self._find_optimal_choices(current_roll, total_dice, total_score)
+            # roll_index is 1-based for applying early-roll banking rules
+            options = self._find_optimal_choices(current_roll, total_dice, total_score, roll_index=roll_count + 1)
             
             if debug and not options:
                 # More detailed diagnostic when debug is on
@@ -358,6 +386,11 @@ class DiceSimulator:
             
             # Add score from kept dice
             total_score += keep_score
+
+            # If the decision was to bank immediately after keeping, finalize the turn
+            if description == "Bank after keep":
+                choice_descriptions.append(f"Decision: BANK NOW after keep at {total_score} points")
+                return total_score, False, roll_count, choice_descriptions
             # Cap at the game win threshold (8000). If reached, stop rolling.
             if total_score >= 8000:
                 total_score = 8000
@@ -501,41 +534,9 @@ class DiceSimulator:
             "expected_value": expected_value,
             "common_scores": common_scores,
             "max_score": max_score,
-            "dice_combination": dict(dice_counts)
+            "dice_combination": dict(dice_counts),
+            "detailed_logs": detailed_logs[:10] if detailed_logs else []
         }
-    
-    def evaluate_strategies(self) -> List[Dict]:
-        """
-        Evaluate multiple strategies for playing the dice game.
-        
-        Returns:
-            List of dictionaries with statistics for each strategy
-        """
-        strategies = [
-            # Conservative: Keep all scoring dice
-            ("Conservative", lambda roll, options: max(options, key=lambda x: x[1]) if options else (set(), 0, "")),
-            
-            # Balanced: Keep dice if they score at least 100 points
-            ("Balanced", self._balanced_strategy),
-            
-            # Risky: Try to keep minimum scoring dice to maximize future potential
-            ("Risky", self._risky_strategy),
-            
-            # Straight Hunter: Prioritize collecting dice for straights
-            ("Straight Hunter", self._straight_hunter_strategy),
-            
-            # Three-of-a-Kind Hunter: Prioritize collecting dice for three-of-a-kind
-            ("Three-of-a-Kind Hunter", self._three_of_a_kind_hunter_strategy),
-        ]
-        
-        results = []
-        for name, strategy_fn in strategies:
-            result = self._evaluate_strategy(name, strategy_fn, self.dice)
-            results.append(result)
-        
-        # Sort by expected value
-        results.sort(key=lambda x: x["expected_value"], reverse=True)
-        return results
     
     def _balanced_strategy(self, roll: List[int], options: List[Tuple[Set[int], int, str]]) -> Tuple[Set[int], int, str]:
         """Balanced strategy: keep dice if they score at least 100 points."""
@@ -1068,6 +1069,7 @@ def find_optimal_dice_combination(available_dice: List[Die], num_dice: int = 6,
             "dice_combination": best["name"],
             "dice_composition": best["dice_combination"],
             "dice_objects": next(c["dice"] for c in combinations_to_test if c["name"] == best["name"]),
+            "avg_score": best.get("avg_score", 0.0),
             "expected_score": best["expected_value"],
             "bust_rate": best["bust_rate"],
             "avg_rolls": best["avg_rolls"],

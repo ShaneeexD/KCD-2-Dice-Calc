@@ -15,6 +15,7 @@ from tkinter import ttk, messagebox
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import threading
+from collections import Counter
 
 from dice_data import load_dice_data, get_die_by_name, get_all_dice_names, Die
 from turn_simulator import find_optimal_dice_combination, DiceSimulator
@@ -42,11 +43,13 @@ class DiceCalculatorApp:
         self.inventory_tab = ttk.Frame(self.tab_control)
         self.calculator_tab = ttk.Frame(self.tab_control)
         self.strategy_tab = ttk.Frame(self.tab_control)
+        self.single_combo_tab = ttk.Frame(self.tab_control)
         
         self.tab_control.add(self.info_tab, text="Dice Information")
         self.tab_control.add(self.inventory_tab, text="Inventory")
         self.tab_control.add(self.calculator_tab, text="Target Calculator")
         self.tab_control.add(self.strategy_tab, text="Strategy Calculator")
+        self.tab_control.add(self.single_combo_tab, text="Single Combo Simulator")
         
         self.tab_control.pack(expand=1, fill="both")
         
@@ -58,6 +61,7 @@ class DiceCalculatorApp:
         self.setup_inventory_tab()
         self.setup_calculator_tab()
         self.setup_strategy_tab()
+        self.setup_single_combo_tab()
     
     def setup_info_tab(self):
         """Set up the Dice Information tab."""
@@ -114,6 +118,204 @@ class DiceCalculatorApp:
         if dice_names:
             self.dice_listbox.selection_set(0)
             self.on_die_selected(None)
+
+    def setup_single_combo_tab(self):
+        """Set up the Single Combo Simulator tab."""
+        frame = ttk.Frame(self.single_combo_tab, padding=PADDING)
+        frame.pack(fill="both", expand=True)
+
+        input_frame = ttk.LabelFrame(frame, text="Select Dice for Each Position (1-6)", padding=PADDING)
+        input_frame.pack(fill="x", pady=(0, 10))
+
+        # Inventory enforcement
+        self.single_respect_inventory_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            input_frame,
+            text="Respect Inventory Quantities",
+            variable=self.single_respect_inventory_var
+        ).grid(row=0, column=0, sticky="w", padx=(0, 10))
+
+        # Simulation count
+        ttk.Label(input_frame, text="Simulations:").grid(row=0, column=1, sticky="e")
+        self.single_sim_count_var = tk.StringVar(value="5000")
+        self.single_sim_entry = ttk.Spinbox(input_frame, from_=100, to=1000000, increment=100,
+                                            width=10, textvariable=self.single_sim_count_var)
+        self.single_sim_entry.grid(row=0, column=2, sticky="w", padx=(5, 10))
+
+        # Minimum bank settings
+        ttk.Label(input_frame, text="Minimum Bank Value:").grid(row=0, column=3, sticky="e")
+        self.single_min_bank_var = tk.StringVar(value="0")
+        self.single_min_bank_entry = ttk.Spinbox(input_frame, from_=0, to=10000, increment=50,
+                                                 width=8, textvariable=self.single_min_bank_var)
+        self.single_min_bank_entry.grid(row=0, column=4, sticky="w", padx=(5, 10))
+
+        ttk.Label(input_frame, text="Apply to first N rolls:").grid(row=0, column=5, sticky="e")
+        self.single_min_bank_rolls_var = tk.StringVar(value="0")
+        self.single_min_bank_rolls_entry = ttk.Spinbox(input_frame, from_=0, to=10, increment=1,
+                                                       width=5, textvariable=self.single_min_bank_rolls_var)
+        self.single_min_bank_rolls_entry.grid(row=0, column=6, sticky="w", padx=(5, 10))
+
+        # Show decision breakdown
+        self.single_show_debug_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            input_frame,
+            text="Show decision breakdown",
+            variable=self.single_show_debug_var
+        ).grid(row=0, column=7, sticky="w", padx=(10, 0))
+
+        # Don't bank if all dice used (continue after refresh)
+        self.single_no_bank_on_clear_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            input_frame,
+            text="Don't bank if all dice used",
+            variable=self.single_no_bank_on_clear_var
+        ).grid(row=0, column=8, sticky="w", padx=(10, 0))
+
+        # Dice selectors (1..6)
+        ttk.Label(input_frame, text="Pick dice for each slot:").grid(row=1, column=0, columnspan=3, sticky="w", pady=(10, 5))
+        names = sorted(get_all_dice_names())
+        self.single_combo_vars = []
+        self.single_combo_boxes = []
+        row_base = 2
+        for i in range(6):
+            ttk.Label(input_frame, text=f"Die {i+1}:").grid(row=row_base + i, column=0, sticky="e", padx=(0, 10))
+            var = tk.StringVar(value=names[0] if names else "")
+            box = ttk.Combobox(input_frame, values=names, width=30, textvariable=var, state="readonly")
+            box.grid(row=row_base + i, column=1, columnspan=2, sticky="w")
+            self.single_combo_vars.append(var)
+            self.single_combo_boxes.append(box)
+
+        # Run button
+        self.single_run_button = ttk.Button(frame, text="Run Single Combo Simulation", command=self.run_single_combo)
+        self.single_run_button.pack(pady=10)
+
+        # Results
+        results_frame = ttk.LabelFrame(frame, text="Single Combo Results", padding=PADDING)
+        results_frame.pack(fill="both", expand=True)
+
+        self.single_results_text = tk.Text(results_frame, height=10, wrap="word")
+        self.single_results_text.pack(fill="both", expand=True)
+
+        # Compact debug output box for decision breakdown
+        debug_frame = ttk.LabelFrame(frame, text="Decision Breakdown (sample)", padding=PADDING)
+        debug_frame.pack(fill="both", expand=False, pady=(5, 0))
+        self.single_debug_text = tk.Text(debug_frame, height=8, wrap="word")
+        self.single_debug_text.pack(fill="x", expand=False)
+
+        # Progress for single combo
+        self.single_progress_var = tk.DoubleVar(value=0)
+        self.single_progress_bar = ttk.Progressbar(results_frame, variable=self.single_progress_var, mode="determinate")
+        self.single_progress_bar.pack(fill="x", pady=(5, 0))
+
+    def run_single_combo(self):
+        """Validate inputs and start single combo simulation in a thread."""
+        try:
+            sim_count = int(self.single_sim_count_var.get())
+            if sim_count < 100:
+                sim_count = 100
+                self.single_sim_count_var.set(str(sim_count))
+
+            selected_names = [v.get() for v in self.single_combo_vars]
+            if any(not n for n in selected_names):
+                messagebox.showerror("Input Error", "Please select a die for all 6 positions.")
+                return
+
+            # Respect inventory quantities if requested
+            if self.single_respect_inventory_var.get():
+                counts = Counter(selected_names)
+                for name, need in counts.items():
+                    have = int(self.quantity_vars.get(name, tk.StringVar(value="0")).get()) if hasattr(self, 'quantity_vars') else 0
+                    if need > have:
+                        messagebox.showerror("Inventory Limit", f"Selected {need}x '{name}' but inventory has {have}.")
+                        return
+
+            # Build dice list
+            dice_list = []
+            for name in selected_names:
+                die = get_die_by_name(name)
+                if not die:
+                    messagebox.showerror("Input Error", f"Unknown die: {name}")
+                    return
+                dice_list.append(die)
+
+            # Disable run button and reset progress
+            self.single_run_button.config(state="disabled")
+            self.single_progress_var.set(0)
+            self.single_results_text.delete(1.0, tk.END)
+            self.single_results_text.insert(tk.END, "Running single combo simulation...\n")
+
+            def worker():
+                try:
+                    simulator = DiceSimulator([], sim_count)
+                    # Apply optional banking rule
+                    try:
+                        min_bank = int(self.single_min_bank_var.get())
+                    except Exception:
+                        min_bank = 0
+                    try:
+                        first_n = int(self.single_min_bank_rolls_var.get())
+                    except Exception:
+                        first_n = 0
+                    if min_bank > 0 and first_n > 0:
+                        simulator.bank_min_value = min_bank
+                        simulator.bank_min_applies_first_n_rolls = first_n
+                    # Apply no-bank-on-clear rule
+                    simulator.no_bank_on_clear = bool(self.single_no_bank_on_clear_var.get())
+                    # Use the same simulation function as strategy uses
+                    stats = simulator.simulate_dice_combination(
+                        dice_list,
+                        sim_count,
+                        None,
+                        diagnostics=bool(self.single_show_debug_var.get())
+                    )
+                    self.root.after(0, lambda: self._update_single_combo_results(selected_names, stats))
+                except Exception as e:
+                    self.root.after(0, lambda: [
+                        messagebox.showerror("Simulation Error", str(e)),
+                        self.single_run_button.config(state="normal")
+                    ])
+
+            threading.Thread(target=worker, daemon=True).start()
+        except ValueError:
+            messagebox.showerror("Input Error", "Please enter a valid number of simulations.")
+
+    def _update_single_combo_results(self, selected_names, stats):
+        """Render results from a single combo simulation."""
+        self.single_results_text.delete(1.0, tk.END)
+        self.single_results_text.insert(tk.END, f"Combination: {', '.join(selected_names)}\n\n")
+        if 'avg_score' in stats:
+            self.single_results_text.insert(tk.END, f"Average Score Per Turn: {stats.get('avg_score', 0):.2f}\n")
+        self.single_results_text.insert(tk.END, f"Expected Score: {stats.get('expected_value', 0):.2f}\n")
+        self.single_results_text.insert(tk.END, f"Bust Rate: {stats.get('bust_rate', 0)*100:.2f}%\n")
+        self.single_results_text.insert(tk.END, f"Average Rolls per Turn: {stats.get('avg_rolls', 0):.2f}\n")
+        # Common scores (handle dict or list-of-pairs)
+        common_raw = stats.get('common_scores', {})
+        pairs = []
+        if isinstance(common_raw, dict):
+            pairs = list(common_raw.items())
+        elif isinstance(common_raw, list):
+            # Expect list of (score, prob) pairs
+            pairs = [(p[0], p[1]) for p in common_raw if isinstance(p, (list, tuple)) and len(p) >= 2]
+        if pairs:
+            self.single_results_text.insert(tk.END, "\nCommon Scores (approx):\n")
+            for score, prob in sorted(pairs, key=lambda x: x[1], reverse=True)[:5]:
+                self.single_results_text.insert(tk.END, f"  {score}: {prob:.2f}%\n")
+        max_score = stats.get('max_score')
+        if max_score is not None:
+            self.single_results_text.insert(tk.END, f"\nMax Score Observed: {max_score}\n")
+
+        self.single_progress_var.set(100)
+        self.single_run_button.config(state="normal")
+
+        # Update decision breakdown box (when diagnostics was enabled)
+        self.single_debug_text.delete(1.0, tk.END)
+        logs = stats.get('detailed_logs') if isinstance(stats, dict) else None
+        if logs:
+            # Show up to ~10 logs
+            self.single_debug_text.insert(tk.END, "\n\n".join(logs))
+        else:
+            if self.single_show_debug_var.get():
+                self.single_debug_text.insert(tk.END, "No decision breakdown available for this run.")
     
     def setup_inventory_tab(self):
         """Set up the Inventory tab."""
@@ -744,6 +946,8 @@ class DiceCalculatorApp:
         
         # Display best dice combination
         self.strategy_results_text.insert(tk.END, f"Best Dice Combination: {result['dice_combination']}\n\n")
+        if 'avg_score' in result:
+            self.strategy_results_text.insert(tk.END, f"Average Score Per Turn: {result['avg_score']:.2f}\n")
         self.strategy_results_text.insert(tk.END, f"Expected Score: {result['expected_score']:.2f}\n")
         self.strategy_results_text.insert(tk.END, f"Bust Rate: {result['bust_rate']*100:.1f}%\n")
         self.strategy_results_text.insert(tk.END, f"Average Rolls per Turn: {result['avg_rolls']:.2f}\n")
@@ -784,6 +988,7 @@ class DiceCalculatorApp:
                 lines.append(f"Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
                 for i, item in enumerate(top, start=1):
                     name = item.get("name", "<unknown>")
+                    avg = item.get("avg_score", 0.0)
                     ev = item.get("expected_value", 0.0)
                     bust = item.get("bust_rate", 0.0)
                     avg_rolls = item.get("avg_rolls", 0.0)
@@ -791,7 +996,7 @@ class DiceCalculatorApp:
                     comp = item.get("dice_combination", {})
                     comp_str = ", ".join(f"{v}x {k}" for k, v in comp.items()) if isinstance(comp, dict) else str(comp)
                     lines.append(f"{i:3d}. {name}\n")
-                    lines.append(f"     EV: {ev:.2f} | Bust: {bust:.2%} | Avg Rolls: {avg_rolls:.2f} | Rank: {rank:.3f}\n")
+                    lines.append(f"     Avg/Turn: {avg:.2f} | EV: {ev:.2f} | Bust: {bust:.2%} | Avg Rolls: {avg_rolls:.2f} | Rank: {rank:.3f}\n")
                     lines.append(f"     Composition: {comp_str}\n\n")
 
                 base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -805,16 +1010,17 @@ class DiceCalculatorApp:
                 csv_path = os.path.join(base_dir, csv_name)
                 with open(csv_path, "w", newline="", encoding="utf-8") as csvfile:
                     writer = csv.writer(csvfile)
-                    writer.writerow(["rank", "name", "expected_value", "bust_rate", "avg_rolls", "rank_score", "composition"])
+                    writer.writerow(["rank", "name", "avg_score", "expected_value", "bust_rate", "avg_rolls", "rank_score", "composition"])
                     for i, item in enumerate(top, start=1):
                         name = item.get("name", "<unknown>")
+                        avg = item.get("avg_score", 0.0)
                         ev = item.get("expected_value", 0.0)
                         bust = item.get("bust_rate", 0.0)
                         avg_rolls = item.get("avg_rolls", 0.0)
                         rank = item.get("rank_score", 0.0)
                         comp = item.get("dice_combination", {})
                         comp_str = ", ".join(f"{v}x {k}" for k, v in comp.items()) if isinstance(comp, dict) else str(comp)
-                        writer.writerow([i, name, f"{ev:.4f}", f"{bust:.4f}", f"{avg_rolls:.4f}", f"{rank:.4f}", comp_str])
+                        writer.writerow([i, name, f"{avg:.4f}", f"{ev:.4f}", f"{bust:.4f}", f"{avg_rolls:.4f}", f"{rank:.4f}", comp_str])
                 # Let the user know where it was saved
                 self.strategy_results_text.insert(tk.END, f"\nSaved top 100 combinations to: {out_path}\n")
                 self.strategy_results_text.insert(tk.END, f"Saved CSV: {csv_path}\n")
