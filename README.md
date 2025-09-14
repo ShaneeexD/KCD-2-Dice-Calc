@@ -7,7 +7,8 @@ A Python application that helps players optimize their dice selection and strate
 - **Dice Information**: View detailed information about all dice in the game, including probability distributions and descriptions
 - **Inventory Management**: Track which dice you have available for use
 - **Target Calculator**: Calculate the optimal combination of dice to maximize your chances of rolling specific numbers
-- **Strategy Calculator**: Find the best dice combination and strategy to maximize your expected score
+- **Single Combo Simulator**: Test a specific dice combination with advanced banking rules and decision breakdowns
+- **Strategy Calculator** (WIP): Find the best dice combination and strategy to maximize your expected score
 - **Progress Tracking**: Real-time progress updates during calculations
 
 ## Requirements
@@ -56,18 +57,33 @@ The results will show:
 - Probability distribution for all numbers
 - Weighted score based on your preferences
 
-### Strategy Calculator Tab
+### Single Combo Simulator Tab
 
-1. Select the number of dice to use (1-6)
-2. Choose the number of simulations to run (more = more accurate but slower)
-3. Toggle "Exhaustive Mode" to test all possible combinations (slower but more thorough)
-4. Click "Calculate Optimal Strategy" to begin simulation
+Test a specific 6-dice combination with advanced options:
+1. Select dice for each of the 6 positions
+2. Configure simulation settings:
+   - Number of simulations to run
+   - Minimum Bank Value: Set a threshold score required to bank in early rolls
+   - Apply to first N rolls: How many early rolls the minimum bank rule applies to
+   - Show decision breakdown: Display detailed turn logs showing decisions made
+   - Don't bank if all dice used: Continue after clearing all dice instead of banking
 
-The results will show:
-- Best dice combination for maximum expected score
-- Expected score and bust rate
-- Average number of rolls per turn
-- Strategy comparison table
+Results include:
+- Average score per turn
+- Expected score (adjusted for bust rate)
+- Bust rate percentage
+- Average rolls per turn
+- Common scores with their frequencies
+- Top scores by value with their frequencies
+- Maximum score observed
+- Decision breakdown (when enabled)
+
+### Strategy Calculator Tab (Work in Progress)
+
+This tab is currently under development. When completed, it will:
+1. Find the optimal dice combination from your inventory
+2. Compare different playing strategies
+3. Provide detailed statistics on expected performance
 
 ## Saving Your Data
 
@@ -78,12 +94,14 @@ Your inventory is automatically saved when you close the application or click "S
 ### Target Calculator
 Uses probability analysis to find dice combinations that maximize the chance of rolling specific target numbers based on their weights.
 
-### Strategy Calculator
-Runs thousands of simulated turns using different strategies to determine the optimal dice combination and playing strategy. The simulation considers:
-- Expected score per turn
-- Bust rate
-- Average number of rolls
-- Maximum observed score
+### Single Combo Simulator
+Simulates thousands of turns with a specific dice combination, using optimal decision-making at each step. Includes:
+- Banking threshold rules for early rolls
+- Options to continue after clearing all dice
+- Detailed breakdowns of decisions made during turns
+
+### Strategy Calculator (WIP)
+Will run simulations across different dice combinations to determine the optimal setup and playing strategy.
 
 ## Performance Notes
 
