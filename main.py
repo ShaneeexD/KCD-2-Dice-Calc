@@ -48,7 +48,7 @@ class DiceCalculatorApp:
         self.tab_control.add(self.info_tab, text="Dice Information")
         self.tab_control.add(self.inventory_tab, text="Inventory")
         self.tab_control.add(self.calculator_tab, text="Target Calculator")
-        self.tab_control.add(self.strategy_tab, text="Strategy Calculator")
+        self.tab_control.add(self.strategy_tab, text="Strategy Calculator (WIP)")
         self.tab_control.add(self.single_combo_tab, text="Single Combo Simulator")
         
         self.tab_control.pack(expand=1, fill="both")
