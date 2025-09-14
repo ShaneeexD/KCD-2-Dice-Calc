@@ -154,6 +154,21 @@ class DiceCalculatorApp:
         self.single_min_bank_rolls_entry = ttk.Spinbox(input_frame, from_=0, to=10, increment=1,
                                                        width=5, textvariable=self.single_min_bank_rolls_var)
         self.single_min_bank_rolls_entry.grid(row=0, column=6, sticky="w", padx=(5, 10))
+        
+        # Apply after refresh checkbox
+        self.single_reset_on_refresh_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            input_frame,
+            text="Apply after refresh",
+            variable=self.single_reset_on_refresh_var
+        ).grid(row=1, column=5, columnspan=2, sticky="w", padx=(5, 10))
+        
+        # Bank if only X dice left
+        ttk.Label(input_frame, text="Bank when X or fewer dice remain:").grid(row=1, column=7, sticky="e")
+        self.single_bank_if_dice_below_var = tk.StringVar(value="0")
+        self.single_bank_if_dice_below_entry = ttk.Spinbox(input_frame, from_=0, to=5, increment=1,
+                                                          width=5, textvariable=self.single_bank_if_dice_below_var)
+        self.single_bank_if_dice_below_entry.grid(row=1, column=8, sticky="w", padx=(5, 10))
 
         # Show decision breakdown
         self.single_show_debug_var = tk.BooleanVar(value=True)
@@ -261,6 +276,14 @@ class DiceCalculatorApp:
                         simulator.bank_min_applies_first_n_rolls = first_n
                     # Apply no-bank-on-clear rule
                     simulator.no_bank_on_clear = bool(self.single_no_bank_on_clear_var.get())
+                    # Apply reset-count-on-refresh rule
+                    simulator.reset_count_on_refresh = bool(self.single_reset_on_refresh_var.get())
+                    # Apply bank-if-dice-below rule
+                    try:
+                        bank_if_below = int(self.single_bank_if_dice_below_var.get())
+                        simulator.bank_if_dice_below = max(0, min(5, bank_if_below))  # Clamp between 0-5
+                    except ValueError:
+                        simulator.bank_if_dice_below = 0
                     # Use the same simulation function as strategy uses
                     stats = simulator.simulate_dice_combination(
                         dice_list,

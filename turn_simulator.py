@@ -79,6 +79,10 @@ class DiceSimulator:
         # If True, when a keep uses all dice (i.e., remaining_dice == 0), do not allow banking
         # immediately after that keep. The turn will refresh dice and continue.
         self.no_bank_on_clear: bool = False
+        # If True, reset the roll count for minimum bank rule after refreshing all dice
+        self.reset_count_on_refresh: bool = False
+        # If set to a value > 0, automatically bank after keeping if remaining dice count falls below this threshold
+        self.bank_if_dice_below: int = 0
 
     def _format_combo_name(self, dice_list: List[Die]) -> str:
         """Return a normalized 'raw' composition string like '3x Weighted die, 2x Lucky Die, 1x Odd die'."""
@@ -192,16 +196,24 @@ class DiceSimulator:
             return []
             
         enhanced_options = []
+        forced_present = False
+        forced_present = False
         for indices, score, desc in all_options:
             # Calculate how many dice we'd have left after keeping these
             kept_dice = len(indices)
             remaining_dice = len(roll) - kept_dice
+            # Determine if low-dice threshold forces banking on this keep
+            force_bank = (self.bank_if_dice_below > 0 and 0 < remaining_dice <= self.bank_if_dice_below)
             
             # Base expected value is the immediate score
             expected_value = score
+            # If this keep would reach or exceed 8000, prioritize it above all else
+            if current_total + score >= 8000:
+                expected_value = 1e9  # ensure selection
+                desc = desc + " + Reach 8000"
             
             # If we'd have dice left, we could roll again - estimate that value
-            if remaining_dice > 0:
+            if remaining_dice > 0 and not force_bank:
                 # Very simple estimate: each remaining die is worth about 25 points on average
                 # (this is a heuristic based on common dice game patterns)
                 future_value = remaining_dice * 25
@@ -210,11 +222,13 @@ class DiceSimulator:
                 expected_value += future_value * (1 - bust_risk)
                 
             # If keeping these dice would clear all dice, we can roll all dice again!
-            elif remaining_dice == 0 and dice_left > len(roll):
+            elif remaining_dice == 0 and dice_left > len(roll) and not force_bank:
                 # Big bonus for clearing all dice (get to reroll all dice)
                 expected_value += 150  # Bonus for getting all dice back
             
-            enhanced_options.append((indices, score, expected_value, desc))
+            # Only offer the non-banking continuation when not forced to bank
+            if not force_bank:
+                enhanced_options.append((indices, score, expected_value, desc))
 
             # Also add an option to "Bank after keep" (i.e., take these points and end the turn now)
             # Respect the minimum bank rule based on the total AFTER keeping this set
@@ -225,18 +239,22 @@ class DiceSimulator:
             if self.bank_min_value is not None and self.bank_min_applies_first_n_rolls is not None:
                 if roll_index <= self.bank_min_applies_first_n_rolls and (current_total + score) < self.bank_min_value:
                     allow_bank_after_keep = False
+            # Force bank-after-keep if remaining dice count is at or below threshold
+            if force_bank:
+                allow_bank_after_keep = True
+            
             if allow_bank_after_keep:
                 bank_ev = float(current_total + score)
-                enhanced_options.append((indices, score, bank_ev, "Bank after keep"))
-            
-        # Always include a 'Bank now' option that represents stopping this turn
-        # Use an empty indices set to indicate banking, unless a min-bank rule suppresses it
-        allow_bank = True
-        if self.bank_min_value is not None and self.bank_min_applies_first_n_rolls is not None:
-            if roll_index <= self.bank_min_applies_first_n_rolls and current_total < self.bank_min_value:
-                allow_bank = False
-        if allow_bank:
-            enhanced_options.append((set(), 0, float(current_total), "Bank now"))
+                # For forced banking, use the real banked total as EV (do not inflate),
+                # so the highest immediate score is chosen among forced-bank options.
+                if force_bank:
+                    enhanced_options.append((indices, score, bank_ev, "Bank after keep (forced - low dice count)"))
+                    forced_present = True
+                else:
+                    enhanced_options.append((indices, score, bank_ev, "Bank after keep"))
+        
+        # Disallow plain 'Bank now' (must bank via a keep). Min-bank rules
+        # are enforced for 'Bank after keep' above.
         
         # Sort by expected value
         enhanced_options.sort(key=lambda x: x[2], reverse=True)
@@ -388,8 +406,11 @@ class DiceSimulator:
             total_score += keep_score
 
             # If the decision was to bank immediately after keeping, finalize the turn
-            if description == "Bank after keep":
-                choice_descriptions.append(f"Decision: BANK NOW after keep at {total_score} points")
+            if description == "Bank after keep" or description.startswith("Bank after keep (forced"):
+                if description.startswith("Bank after keep (forced"):
+                    choice_descriptions[-1] = f"Roll {roll_count}: {roll_str} - Kept {kept_str} for {keep_score} points and BANK NOW at {total_score} points (forced - low dice count)"
+                else:
+                    choice_descriptions.append(f"Decision: BANK NOW after keep at {total_score} points")
                 return total_score, False, roll_count, choice_descriptions
             # Cap at the game win threshold (8000). If reached, stop rolling.
             if total_score >= 8000:
@@ -410,8 +431,15 @@ class DiceSimulator:
                 choice_descriptions.append(f"Used all dice! Refreshing with full set. Current score: {total_score}")
                 current_dice = list(dice)
                 
+                # Reset roll count if configured to do so
+                if self.reset_count_on_refresh and self.bank_min_applies_first_n_rolls is not None:
+                    roll_count = 0  # Will be incremented to 1 at the start of the next loop
+                    choice_descriptions.append(f"Reset roll count for minimum bank rule")
+                
                 if debug:
                     logger.info(f"DEBUG: Used all dice - refreshing with full set. Current score: {total_score}")
+                    if self.reset_count_on_refresh:
+                        logger.info(f"DEBUG: Reset roll count for minimum bank rule")
         
         # If we hit max turns, report it
         if roll_count >= max_turns:
