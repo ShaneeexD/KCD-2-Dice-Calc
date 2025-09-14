@@ -144,19 +144,19 @@ class DiceCalculatorApp:
 
         # Minimum bank settings
         ttk.Label(input_frame, text="Minimum Bank Value:").grid(row=0, column=3, sticky="e")
-        self.single_min_bank_var = tk.StringVar(value="0")
+        self.single_min_bank_var = tk.StringVar(value="500")
         self.single_min_bank_entry = ttk.Spinbox(input_frame, from_=0, to=10000, increment=50,
                                                  width=8, textvariable=self.single_min_bank_var)
         self.single_min_bank_entry.grid(row=0, column=4, sticky="w", padx=(5, 10))
 
         ttk.Label(input_frame, text="Apply to first N rolls:").grid(row=0, column=5, sticky="e")
-        self.single_min_bank_rolls_var = tk.StringVar(value="0")
+        self.single_min_bank_rolls_var = tk.StringVar(value="2")
         self.single_min_bank_rolls_entry = ttk.Spinbox(input_frame, from_=0, to=10, increment=1,
                                                        width=5, textvariable=self.single_min_bank_rolls_var)
         self.single_min_bank_rolls_entry.grid(row=0, column=6, sticky="w", padx=(5, 10))
 
         # Show decision breakdown
-        self.single_show_debug_var = tk.BooleanVar(value=False)
+        self.single_show_debug_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(
             input_frame,
             text="Show decision breakdown",
@@ -164,7 +164,7 @@ class DiceCalculatorApp:
         ).grid(row=0, column=7, sticky="w", padx=(10, 0))
 
         # Don't bank if all dice used (continue after refresh)
-        self.single_no_bank_on_clear_var = tk.BooleanVar(value=False)
+        self.single_no_bank_on_clear_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(
             input_frame,
             text="Don't bank if all dice used",
@@ -299,6 +299,12 @@ class DiceCalculatorApp:
         if pairs:
             self.single_results_text.insert(tk.END, "\nCommon Scores (approx):\n")
             for score, prob in sorted(pairs, key=lambda x: x[1], reverse=True)[:5]:
+                self.single_results_text.insert(tk.END, f"  {score}: {prob:.2f}%\n")
+        # Top Scores by value
+        top_pairs = stats.get('top_scores')
+        if isinstance(top_pairs, list) and top_pairs:
+            self.single_results_text.insert(tk.END, "\nTop Scores (by value):\n")
+            for score, prob in top_pairs[:5]:
                 self.single_results_text.insert(tk.END, f"  {score}: {prob:.2f}%\n")
         max_score = stats.get('max_score')
         if max_score is not None:

@@ -518,6 +518,12 @@ class DiceSimulator:
              for score, count in score_distribution.items()],
             key=lambda x: x[1], reverse=True
         )[:5]
+        # Find top scores by value (highest scores observed) with their percentages
+        top_scores = sorted(
+            [(score, count / num_simulations * 100)
+             for score, count in score_distribution.items()],
+            key=lambda x: x[0], reverse=True
+        )[:5]
         
         elapsed_time = time.time() - start_time
         logger.info(f"Simulation completed in {elapsed_time:.2f}s")
@@ -533,6 +539,7 @@ class DiceSimulator:
             "avg_rolls": avg_rolls,
             "expected_value": expected_value,
             "common_scores": common_scores,
+            "top_scores": top_scores,
             "max_score": max_score,
             "dice_combination": dict(dice_counts),
             "detailed_logs": detailed_logs[:10] if detailed_logs else []
