@@ -105,8 +105,24 @@ class DiceCalculatorApp:
         
         self.tab_control.pack(expand=1, fill="both")
         
+        # Some methods may have been defined at module scope; bind them if needed
+        try:
+            _ = self.load_inventory
+        except AttributeError:
+            if 'load_inventory' in globals():
+                # Bind module function as instance method
+                self.load_inventory = globals()['load_inventory'].__get__(self, DiceCalculatorApp)
+        try:
+            _ = self.save_inventory
+        except AttributeError:
+            if 'save_inventory' in globals():
+                self.save_inventory = globals()['save_inventory'].__get__(self, DiceCalculatorApp)
+
         # Initialize inventory data
-        self.inventory = self.load_inventory()
+        if hasattr(self, 'load_inventory'):
+            self.inventory = self.load_inventory()
+        else:
+            self.inventory = {name: 0 for name in get_all_dice_names()}
         
         # Set up each tab
         self.setup_info_tab()
@@ -114,6 +130,8 @@ class DiceCalculatorApp:
         self.setup_calculator_tab()
         self.setup_strategy_tab()
         self.setup_single_combo_tab()
+        # Shared state between tabs
+        self.last_best_combo_names = None  # type: list[str] | None
     
     def setup_info_tab(self):
         """Set up the Dice Information tab."""
@@ -528,6 +546,65 @@ class DiceCalculatorApp:
             command=self.save_inventory
         ).pack(pady=10)
     
+    def setup_inventory_tab(self):
+        """Set up the Inventory tab."""
+        frame = ttk.Frame(self.inventory_tab, padding=PADDING)
+        frame.pack(fill="both", expand=True)
+        
+        # Instructions
+        ttk.Label(frame, text="Set the quantity of each die you have in your inventory:", 
+                 font=("Arial", 12)).pack(anchor="w", pady=(0, 10))
+        
+        # Create a scrollable frame for the inventory items
+        canvas = tk.Canvas(frame)
+        scrollbar = ttk.Scrollbar(frame, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # Create header row
+        header_frame = ttk.Frame(scrollable_frame)
+        header_frame.pack(fill="x", pady=(0, 5))
+        
+        ttk.Label(header_frame, text="Die Name", width=30, font=("Arial", 10, "bold")).grid(row=0, column=0, padx=5)
+        ttk.Label(header_frame, text="Quantity", width=10, font=("Arial", 10, "bold")).grid(row=0, column=1, padx=5)
+        
+        # Create inventory entries
+        self.quantity_vars = {}
+        dice_names = sorted(get_all_dice_names())
+        
+        for idx, name in enumerate(dice_names):
+            row_frame = ttk.Frame(scrollable_frame)
+            row_frame.pack(fill="x", pady=2)
+            
+            ttk.Label(row_frame, text=name, width=30).grid(row=0, column=0, padx=5)
+            
+            self.quantity_vars[name] = tk.StringVar(value=str(self.inventory.get(name, 0)))
+            quantity_entry = ttk.Spinbox(
+                row_frame, 
+                from_=0, 
+                to=10, 
+                width=5, 
+                textvariable=self.quantity_vars[name]
+            )
+            quantity_entry.grid(row=0, column=1, padx=5)
+        
+        # Button to save inventory
+        ttk.Button(
+            frame, 
+            text="Save Inventory", 
+            command=self.save_inventory
+        ).pack(pady=10)
+    
     def setup_calculator_tab(self):
         """Set up the Calculator tab."""
         frame = ttk.Frame(self.calculator_tab, padding=PADDING)
@@ -571,11 +648,23 @@ class DiceCalculatorApp:
             die_combo.set(str(i))  # Default to the die position as target
         
         # Calculate button
-        ttk.Button(
+        calc_btn = ttk.Button(
             input_frame, 
             text="Calculate Best Combination", 
             command=self.calculate_best_combination
-        ).grid(row=2, column=0, columnspan=3, pady=10)
+        )
+        calc_btn.grid(row=2, column=0, pady=10, sticky="w")
+        add_tooltip(calc_btn, "Compute the best die for each position given your targets.")
+
+        # Send to Single Combo Simulator button (disabled until a result exists)
+        self.send_to_single_button = ttk.Button(
+            input_frame,
+            text="Send to Single Combo Simulator",
+            command=self.send_to_single_combo,
+            state="disabled"
+        )
+        self.send_to_single_button.grid(row=2, column=1, pady=10, sticky="w", padx=(10, 0))
+        add_tooltip(self.send_to_single_button, "Open the Single Combo Simulator with the best dice pre-selected.")
         
         # Bottom frame for results
         results_frame = ttk.LabelFrame(frame, text="Results", padding=PADDING)
@@ -588,6 +677,96 @@ class DiceCalculatorApp:
         # Frame for the probability chart
         self.result_chart_frame = ttk.Frame(results_frame)
         self.result_chart_frame.pack(fill="both", expand=True)
+    
+    def calculate_best_combination(self):
+        """Calculate the best combination of dice based on user inputs."""
+        # Clear previous results
+        self.target_results_text.delete(1.0, tk.END)
+        
+        try:
+            # Get target numbers for each die position
+            target_numbers = {}
+            for i in range(1, 7):
+                if i in self.target_vars and self.target_vars[i].get():
+                    target_numbers[i] = int(self.target_vars[i].get())
+            
+            # Check if test mode is enabled
+            if self.test_mode_var.get():
+                # Use all dice with quantity 6
+                usable_dice = []
+                for name in get_all_dice_names():
+                    die = get_die_by_name(name)
+                    usable_dice.extend([die] * 6)  # 6 of each die in test mode
+            else:
+                # Use inventory
+                available_dice = {name: int(self.quantity_vars[name].get()) for name in self.quantity_vars
+                                if int(self.quantity_vars[name].get()) > 0}
+                
+                if not available_dice:
+                    messagebox.showwarning("Empty Inventory", "You don't have any dice in your inventory. "
+                                                            "Please add some in the Inventory tab.")
+                    return
+                
+                # Get the list of dice we can use (respecting quantity)
+                usable_dice = []
+                for name, quantity in available_dice.items():
+                    die = get_die_by_name(name)
+                    usable_dice.extend([die] * quantity)
+            
+            # Run the calculation
+            self.target_results_text.insert(tk.END, "Calculating optimal dice for each position...\n\n")
+            
+            # Find best dice for each position
+            best_combo, probabilities = self.find_best_dice_for_positions(
+                usable_dice, target_numbers)
+            
+            # Display results
+            self.target_results_text.insert(tk.END, "Best Dice Combination:\n")
+            
+            total_probability = 1.0
+            for position, (die, target_num, probability) in best_combo.items():
+                self.target_results_text.insert(tk.END, 
+                    f"Die position {position}: {die.name} - {probability:.2f}% chance of rolling a {target_num}\n")
+                total_probability *= (probability / 100.0)
+            
+            # Overall probability (multiply individual probabilities)
+            overall_percent = total_probability * 100.0
+            self.target_results_text.insert(tk.END, 
+                f"\nOverall probability of getting all target numbers: {overall_percent:.4f}%\n")
+            
+            # Update chart with results
+            self.update_results_chart_for_positions(best_combo)
+            
+            # Save for cross-tab sending and enable button
+            try:
+                ordered = [best_combo[pos][0].name for pos in sorted(best_combo.keys())]
+                self.last_best_combo_names = ordered
+                self.send_to_single_button.config(state="normal")
+            except Exception:
+                pass
+        
+        except ValueError as e:
+            messagebox.showerror("Input Error", str(e))
+
+    def send_to_single_combo(self):
+        """Open Single Combo tab with the last best combo pre-selected in dropdowns."""
+        if not self.last_best_combo_names or len(self.last_best_combo_names) != 6:
+            messagebox.showwarning("No Combination", "Please calculate a best combination first.")
+            return
+        # Switch tab first
+        try:
+            self.tab_control.select(self.single_combo_tab)
+        except Exception:
+            pass
+        # Apply names to the 6 selectors, if present in the list of dice
+        names = set(get_all_dice_names())
+        for i, name in enumerate(self.last_best_combo_names):
+            if i < len(self.single_combo_vars) and name in names:
+                self.single_combo_vars[i].set(name)
+                try:
+                    self.single_combo_boxes[i].set(name)
+                except Exception:
+                    pass
     
     def on_die_selected(self, event):
         """Handle selection of a die from the listbox."""
@@ -706,10 +885,13 @@ class DiceCalculatorApp:
             self.target_results_text.insert(tk.END, "Best Dice Combination:\n")
             
             total_probability = 1.0
+            # Collect names in position order for later sending
+            best_names = []
             for position, (die, target_num, probability) in best_combo.items():
                 self.target_results_text.insert(tk.END, 
                     f"Die position {position}: {die.name} - {probability:.2f}% chance of rolling a {target_num}\n")
                 total_probability *= (probability / 100.0)
+                best_names.append(die.name)
             
             # Overall probability (multiply individual probabilities)
             overall_percent = total_probability * 100.0
@@ -718,9 +900,37 @@ class DiceCalculatorApp:
             
             # Update chart with results
             self.update_results_chart_for_positions(best_combo)
+            # Save for cross-tab sending and enable button
+            # Ensure order is Die 1..6; best_combo keys are positions
+            ordered = [best_combo[pos][0].name for pos in sorted(best_combo.keys())]
+            self.last_best_combo_names = ordered
+            self.send_to_single_button.config(state="normal")
             
         except ValueError as e:
             messagebox.showerror("Input Error", str(e))
+
+    def send_to_single_combo(self):
+        """Open Single Combo tab with the last best combo pre-selected in dropdowns."""
+        if not self.last_best_combo_names or len(self.last_best_combo_names) != 6:
+            messagebox.showwarning("No Combination", "Please calculate a best combination first.")
+            return
+        # Switch tab first
+        try:
+            self.tab_control.select(self.single_combo_tab)
+        except Exception:
+            pass
+        # Apply names to the 6 selectors, if present in the list of dice
+        names = set(get_all_dice_names())
+        for i, name in enumerate(self.last_best_combo_names):
+            if i < len(self.single_combo_vars):
+                # Only set if the name exists in data
+                if name in names:
+                    self.single_combo_vars[i].set(name)
+                    # Also update the combobox displayed value
+                    try:
+                        self.single_combo_boxes[i].set(name)
+                    except Exception:
+                        pass
     
     def find_best_dice_for_positions(self, available_dice, target_numbers):
         """
