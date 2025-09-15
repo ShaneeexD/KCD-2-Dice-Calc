@@ -16,9 +16,12 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import threading
 from collections import Counter
+from typing import List, Dict
+import random
 
 from dice_data import load_dice_data, get_die_by_name, get_all_dice_names, Die
 from turn_simulator import find_optimal_dice_combination, DiceSimulator
+from game_simulator import GameSimulator, AI_PROFILES
 
 # Ensure dice data is loaded
 ALL_DICE = load_dice_data()
@@ -96,12 +99,14 @@ class DiceCalculatorApp:
         self.calculator_tab = ttk.Frame(self.tab_control)
         self.strategy_tab = ttk.Frame(self.tab_control)
         self.single_combo_tab = ttk.Frame(self.tab_control)
+        self.game_sim_tab = ttk.Frame(self.tab_control)
         
         self.tab_control.add(self.info_tab, text="Dice Information")
         self.tab_control.add(self.inventory_tab, text="Inventory")
         self.tab_control.add(self.calculator_tab, text="Target Calculator")
         self.tab_control.add(self.strategy_tab, text="Strategy Calculator (WIP)")
         self.tab_control.add(self.single_combo_tab, text="Single Combo Simulator")
+        self.tab_control.add(self.game_sim_tab, text="Game Simulator (WIP)")
         
         self.tab_control.pack(expand=1, fill="both")
         
@@ -130,6 +135,7 @@ class DiceCalculatorApp:
         self.setup_calculator_tab()
         self.setup_strategy_tab()
         self.setup_single_combo_tab()
+        self.setup_game_sim_tab()
         # Shared state between tabs
         self.last_best_combo_names = None  # type: list[str] | None
     
@@ -486,6 +492,171 @@ class DiceCalculatorApp:
         else:
             if self.single_show_debug_var.get():
                 self.single_debug_text.insert(tk.END, "No decision breakdown available for this run.")
+
+    def setup_game_sim_tab(self):
+        """Set up the Game Simulator tab (Player vs AI full games to a point cap)."""
+        frame = ttk.Frame(self.game_sim_tab, padding=PADDING)
+        frame.pack(fill="both", expand=True)
+
+        # Controls
+        control = ttk.LabelFrame(frame, text="Simulation Settings", padding=PADDING)
+        control.pack(fill="x", pady=(0, 10))
+
+        # Row 1: AI profile, games, win target
+        row1 = ttk.Frame(control)
+        row1.pack(fill="x", pady=2)
+
+        ttk.Label(row1, text="AI Profile:").grid(row=0, column=0, sticky="e")
+        self.ai_profile_var = tk.StringVar(value=sorted(AI_PROFILES.keys())[0])
+        self.ai_profile_box = ttk.Combobox(row1, values=sorted(AI_PROFILES.keys()), width=20,
+                                           textvariable=self.ai_profile_var, state="readonly")
+        self.ai_profile_box.grid(row=0, column=1, sticky="w", padx=(5, 15))
+        add_tooltip(self.ai_profile_box, "Select the AI difficulty profile (no badges). See AI_BEHAVIOR.md for details.")
+
+        ttk.Label(row1, text="Games:").grid(row=0, column=2, sticky="e")
+        self.games_count_var = tk.StringVar(value="2000")
+        self.games_count_entry = ttk.Spinbox(row1, from_=100, to=200000, increment=100,
+                                             width=10, textvariable=self.games_count_var)
+        self.games_count_entry.grid(row=0, column=3, sticky="w", padx=(5, 15))
+        add_tooltip(self.games_count_entry, "Number of games to simulate. Higher = more accurate but slower.")
+
+        ttk.Label(row1, text="Win Target:").grid(row=0, column=4, sticky="e")
+        self.game_win_target_var = tk.StringVar(value="8000")
+        self.game_win_target_entry = ttk.Spinbox(row1, from_=500, to=20000, increment=250,
+                                                 width=10, textvariable=self.game_win_target_var)
+        self.game_win_target_entry.grid(row=0, column=5, sticky="w", padx=(5, 15))
+        add_tooltip(self.game_win_target_entry, "Game point cap to win.")
+
+        # Player dice selection
+        player_box = ttk.LabelFrame(frame, text="Player Dice (6)", padding=PADDING)
+        player_box.pack(fill="x", pady=(0, 10))
+
+        dice_names = sorted(get_all_dice_names())
+        self.all_dice_names = dice_names
+        self.player_combo_vars = []
+        for i in range(6):
+            ttk.Label(player_box, text=f"Die {i+1}:").grid(row=i, column=0, sticky="e", padx=(0, 10))
+            var = tk.StringVar(value=dice_names[0] if dice_names else "")
+            box = ttk.Combobox(player_box, values=dice_names, width=30, textvariable=var, state="readonly")
+            box.grid(row=i, column=1, sticky="w")
+            self.player_combo_vars.append(var)
+
+        # AI dice selection
+        ai_box = ttk.LabelFrame(frame, text="AI Dice (6)", padding=PADDING)
+        ai_box.pack(fill="x", pady=(0, 10))
+        self.ai_combo_vars = []
+        for i in range(6):
+            ttk.Label(ai_box, text=f"Die {i+1}:").grid(row=i, column=0, sticky="e", padx=(0, 10))
+            var = tk.StringVar(value=dice_names[0] if dice_names else "")
+            box = ttk.Combobox(ai_box, values=dice_names, width=30, textvariable=var, state="readonly")
+            box.grid(row=i, column=1, sticky="w")
+            self.ai_combo_vars.append(var)
+
+        # Randomize AI dice button
+        ttk.Button(ai_box, text="Randomize AI Dice", command=self.randomize_ai_dice).grid(
+            row=6, column=0, columnspan=2, pady=(6, 0)
+        )
+
+        # Run button
+        self.run_game_sim_btn = ttk.Button(frame, text="Run Game Simulation", command=self.run_game_simulation)
+        self.run_game_sim_btn.pack(pady=10)
+
+        # Results area
+        results_frame = ttk.LabelFrame(frame, text="Game Simulation Results", padding=PADDING)
+        results_frame.pack(fill="both", expand=True)
+        self.game_results_text = tk.Text(results_frame, height=14, wrap="word")
+        self.game_results_text.pack(fill="both", expand=True)
+
+    def randomize_ai_dice(self):
+        """Randomly assign AI dice from the full dice list (duplicates allowed)."""
+        names = getattr(self, 'all_dice_names', None) or sorted(get_all_dice_names())
+        if not names:
+            messagebox.showerror("Randomize Error", "No dice available to randomize.")
+            return
+        for var in getattr(self, 'ai_combo_vars', []):
+            var.set(random.choice(names))
+
+    def run_game_simulation(self):
+        """Start the game simulation in a background thread."""
+        try:
+            n_games = int(self.games_count_var.get())
+            n_games = max(100, n_games)
+        except Exception:
+            n_games = 1000
+            self.games_count_var.set(str(n_games))
+
+        try:
+            win_target = int(self.game_win_target_var.get())
+        except Exception:
+            win_target = 8000
+            self.game_win_target_var.set(str(win_target))
+
+        # Build dice lists
+        player_names = [v.get() for v in self.player_combo_vars]
+        ai_names = [v.get() for v in self.ai_combo_vars]
+
+        if any(not n for n in player_names) or any(not n for n in ai_names):
+            messagebox.showerror("Input Error", "Please select a die for all 6 positions for both Player and AI.")
+            return
+
+        player_dice = []
+        ai_dice = []
+        for name in player_names:
+            d = get_die_by_name(name)
+            if not d:
+                messagebox.showerror("Input Error", f"Unknown player die: {name}")
+                return
+            player_dice.append(d)
+        for name in ai_names:
+            d = get_die_by_name(name)
+            if not d:
+                messagebox.showerror("Input Error", f"Unknown AI die: {name}")
+                return
+            ai_dice.append(d)
+
+        profile = self.ai_profile_var.get()
+
+        # Disable button and clear results
+        self.run_game_sim_btn.config(state="disabled")
+        self.game_results_text.delete(1.0, tk.END)
+        self.game_results_text.insert(tk.END, "Running game simulations...\n")
+
+        def worker():
+            try:
+                sim = GameSimulator(player_dice, ai_dice, win_target=win_target, ai_profile=profile)
+                stats = sim.simulate_games(n_games=n_games)
+                self.root.after(0, lambda: self._update_game_sim_results(player_names, ai_names, stats))
+            except Exception as e:
+                self.root.after(0, lambda: [
+                    messagebox.showerror("Simulation Error", str(e)),
+                    self.run_game_sim_btn.config(state="normal")
+                ])
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _update_game_sim_results(self, player_names: List[str], ai_names: List[str], stats: Dict):
+        """Render results from the full game simulation."""
+        self.game_results_text.delete(1.0, tk.END)
+        self.game_results_text.insert(tk.END, f"Player dice: {', '.join(player_names)}\n")
+        self.game_results_text.insert(tk.END, f"AI dice: {', '.join(ai_names)}\n")
+        self.game_results_text.insert(tk.END, f"AI profile: {stats.get('ai_profile')}\n")
+        self.game_results_text.insert(tk.END, f"Win target: {stats.get('win_target')}\n")
+        self.game_results_text.insert(tk.END, f"Games: {stats.get('games')}\n\n")
+
+        self.game_results_text.insert(tk.END, f"Player Win%: {stats.get('player_win_rate', 0.0)*100:.2f}%\n")
+        self.game_results_text.insert(tk.END, f"AI Win%: {stats.get('ai_win_rate', 0.0)*100:.2f}%\n")
+        self.game_results_text.insert(tk.END, f"Average turns per game: {stats.get('avg_turns', 0.0):.2f}\n")
+        self.game_results_text.insert(tk.END, f"Average margin (Player - AI): {stats.get('avg_margin', 0.0):.2f}\n")
+
+        length_dist = stats.get('length_distribution', {})
+        if isinstance(length_dist, dict) and length_dist:
+            self.game_results_text.insert(tk.END, "\nGame length distribution (turns => %):\n")
+            for k, v in sorted(length_dist.items(), key=lambda x: x[0])[:10]:
+                self.game_results_text.insert(tk.END, f"  {k}: {v:.2f}%\n")
+
+        self.game_results_text.insert(tk.END, f"\nElapsed: {stats.get('elapsed_sec', 0.0):.2f}s\n")
+
+        self.run_game_sim_btn.config(state="normal")
     
     def setup_inventory_tab(self):
         """Set up the Inventory tab."""

@@ -8,6 +8,7 @@ A Python application that helps players optimize their dice selection and strate
 - **Inventory Management**: Track which dice you have available for use
 - **Target Calculator**: Calculate the optimal combination of dice to maximize your chances of rolling specific numbers
 - **Single Combo Simulator**: Test a specific dice combination with advanced banking rules and decision breakdowns
+- **Game Simulator (Player vs AI)**: Simulate full games to a point cap against an AI profile (no badges) and get win rates and more
 - **Strategy Calculator** (WIP): Find the best dice combination and strategy to maximize your expected score
 - **Progress Tracking**: Real-time progress updates during calculations
 
@@ -77,6 +78,23 @@ Results include:
 - Top scores by value with their frequencies
 - Maximum score observed
 - Decision breakdown (when enabled)
+
+### Game Simulator Tab (Player vs AI)
+
+Simulate complete games against an AI opponent using the same turn logic as the Single Combo Simulator.
+
+1. Select 6 dice for the Player
+2. Select 6 dice for the AI
+3. Choose an AI Profile (difficulty) – see `AI_BEHAVIOR.md` for details; badges are not modeled
+4. Set the number of games and win target (point cap)
+5. Run the simulation
+
+Results include:
+- Player and AI win percentages
+- Average turns per game
+- Average margin (Player - AI)
+- Distribution of game lengths (by number of turns)
+- Elapsed time
 
 ### Strategy Calculator Tab (Work in Progress)
 
