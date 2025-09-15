@@ -27,6 +27,58 @@ ALL_DICE = load_dice_data()
 PADDING = 10
 DICE_INVENTORY_FILE = "dice_inventory.json"
 
+
+# Simple tooltip helper for Tkinter widgets
+class _ToolTip:
+    def __init__(self, widget, text: str):
+        self.widget = widget
+        self.text = text
+        self.tipwindow = None
+        self.id = None
+        self.widget.bind("<Enter>", self._enter)
+        self.widget.bind("<Leave>", self._leave)
+
+    def _enter(self, _event=None):
+        self._schedule()
+
+    def _leave(self, _event=None):
+        self._unschedule()
+        self._hide()
+
+    def _schedule(self):
+        self._unschedule()
+        self.id = self.widget.after(500, self._show)
+
+    def _unschedule(self):
+        if self.id:
+            self.widget.after_cancel(self.id)
+            self.id = None
+
+    def _show(self):
+        if self.tipwindow or not self.text:
+            return
+        # Position tooltip near the widget
+        x = self.widget.winfo_rootx() + 20
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 5
+        self.tipwindow = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        label = tk.Label(tw, text=self.text, justify=tk.LEFT,
+                         background="#ffffe0", relief=tk.SOLID, borderwidth=1,
+                         font=("tahoma", "8", "normal"), wraplength=320)
+        label.pack(ipadx=5, ipady=3)
+
+    def _hide(self):
+        tw = self.tipwindow
+        self.tipwindow = None
+        if tw:
+            tw.destroy()
+
+
+def add_tooltip(widget, text: str):
+    """Attach a tooltip to a Tk widget."""
+    _ToolTip(widget, text)
+
 class DiceCalculatorApp:
     def __init__(self, root):
         """Initialize the main application window."""
@@ -149,12 +201,14 @@ class DiceCalculatorApp:
         self.single_sim_entry = ttk.Spinbox(row1, from_=100, to=1000000, increment=100,
                                             width=10, textvariable=self.single_sim_count_var)
         self.single_sim_entry.grid(row=0, column=1, sticky="w", padx=(5, 15))
+        add_tooltip(self.single_sim_entry, "Number of Monte Carlo simulations to run for this combo. Higher = more accurate but slower.")
 
         ttk.Label(row1, text="Win Target:").grid(row=0, column=2, sticky="e")
         self.single_win_target_var = tk.StringVar(value="8000")
         self.single_win_target_entry = ttk.Spinbox(row1, from_=500, to=20000, increment=250,
                                                    width=10, textvariable=self.single_win_target_var)
         self.single_win_target_entry.grid(row=0, column=3, sticky="w", padx=(5, 15))
+        add_tooltip(self.single_win_target_entry, "Game mode target score to win the game. The sim will stop the turn once this total is reached.")
 
         # Row 2: Banking rules (minimum bank)
         ttk.Label(row2, text="Minimum Bank Value:").grid(row=0, column=0, sticky="e")
@@ -162,45 +216,56 @@ class DiceCalculatorApp:
         self.single_min_bank_entry = ttk.Spinbox(row2, from_=0, to=10000, increment=50,
                                                  width=10, textvariable=self.single_min_bank_var)
         self.single_min_bank_entry.grid(row=0, column=1, sticky="w", padx=(5, 15))
+        add_tooltip(self.single_min_bank_entry, "Minimum total required to be allowed to bank during the early rolls below.")
 
         ttk.Label(row2, text="Apply to first N rolls:").grid(row=0, column=2, sticky="e")
         self.single_min_bank_rolls_var = tk.StringVar(value="2")
         self.single_min_bank_rolls_entry = ttk.Spinbox(row2, from_=0, to=10, increment=1,
                                                        width=6, textvariable=self.single_min_bank_rolls_var)
         self.single_min_bank_rolls_entry.grid(row=0, column=3, sticky="w", padx=(5, 15))
+        add_tooltip(self.single_min_bank_rolls_entry, "How many rolls the minimum bank rule applies to at the start of a turn (and after refresh if enabled).")
 
-        ttk.Checkbutton(
+        apply_after_refresh_cb = ttk.Checkbutton(
             row2,
             text="Apply after refresh",
             variable=self.single_reset_on_refresh_var
-        ).grid(row=0, column=4, sticky="w", padx=(5, 15))
+        )
+        apply_after_refresh_cb.grid(row=0, column=4, sticky="w", padx=(5, 15))
+        add_tooltip(apply_after_refresh_cb, "When all dice are used and the set refreshes, restart the early-roll counter so the minimum bank rule applies again.")
 
         # Row 3: Behavior & diagnostics
-        ttk.Checkbutton(
+        no_bank_on_clear_cb = ttk.Checkbutton(
             row3,
             text="Don't bank if all dice used",
             variable=self.single_no_bank_on_clear_var
-        ).grid(row=0, column=0, sticky="w")
+        )
+        no_bank_on_clear_cb.grid(row=0, column=0, sticky="w")
+        add_tooltip(no_bank_on_clear_cb, "If a keep uses all dice, do not allow immediate banking; instead, refresh all dice and continue the turn.")
 
         ttk.Label(row3, text="Bank when X or fewer dice remain:").grid(row=0, column=1, sticky="e", padx=(15, 0))
         self.single_bank_if_dice_below_var = tk.StringVar(value="0")
         self.single_bank_if_dice_below_entry = ttk.Spinbox(row3, from_=0, to=5, increment=1,
                                                            width=6, textvariable=self.single_bank_if_dice_below_var)
         self.single_bank_if_dice_below_entry.grid(row=0, column=2, sticky="w", padx=(5, 15))
+        add_tooltip(self.single_bank_if_dice_below_entry, "If a keep would leave X or fewer dice, bank immediately on that same roll. Set 0 to disable.")
 
-        ttk.Checkbutton(
+        show_debug_cb = ttk.Checkbutton(
             row3,
             text="Show decision breakdown",
             variable=self.single_show_debug_var
-        ).grid(row=0, column=3, sticky="w", padx=(10, 0))
+        )
+        show_debug_cb.grid(row=0, column=3, sticky="w", padx=(10, 0))
+        add_tooltip(show_debug_cb, "Include a compact log of decisions taken during simulated turns.")
 
         # Inventory enforcement
         self.single_respect_inventory_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
+        respect_inventory_cb = ttk.Checkbutton(
             row3,
             text="Respect Inventory Quantities",
             variable=self.single_respect_inventory_var
-        ).grid(row=0, column=4, sticky="w", padx=(15, 0))
+        )
+        respect_inventory_cb.grid(row=0, column=4, sticky="w", padx=(15, 0))
+        add_tooltip(respect_inventory_cb, "If enabled, you can only select dice up to the quantities in your Inventory tab. If disabled, you can select any dice.")
 
         # Dice pickers section
         input_frame = ttk.LabelFrame(frame, text="Select Dice for Each Position (1-6)", padding=PADDING)
