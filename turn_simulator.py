@@ -83,6 +83,8 @@ class DiceSimulator:
         self.reset_count_on_refresh: bool = False
         # If set to a value > 0, automatically bank after keeping if remaining dice count falls below this threshold
         self.bank_if_dice_below: int = 0
+        # Win target for ending a turn early (configurable, default 8000)
+        self.win_target: int = 8000
 
     def _format_combo_name(self, dice_list: List[Die]) -> str:
         """Return a normalized 'raw' composition string like '3x Weighted die, 2x Lucky Die, 1x Odd die'."""
@@ -207,10 +209,10 @@ class DiceSimulator:
             
             # Base expected value is the immediate score
             expected_value = score
-            # If this keep would reach or exceed 8000, prioritize it above all else
-            if current_total + score >= 8000:
+            # If this keep would reach or exceed win target, prioritize it above all else
+            if current_total + score >= self.win_target:
                 expected_value = 1e9  # ensure selection
-                desc = desc + " + Reach 8000"
+                desc = desc + f" + Reach {self.win_target}"
             
             # If we'd have dice left, we could roll again - estimate that value
             if remaining_dice > 0 and not force_bank:
@@ -412,10 +414,10 @@ class DiceSimulator:
                 else:
                     choice_descriptions.append(f"Decision: BANK NOW after keep at {total_score} points")
                 return total_score, False, roll_count, choice_descriptions
-            # Cap at the game win threshold (8000). If reached, stop rolling.
-            if total_score >= 8000:
-                total_score = 8000
-                choice_descriptions.append(f"Reached 8000 points, ending turn.")
+            # Cap at the game win threshold. If reached, stop rolling.
+            if total_score >= self.win_target:
+                total_score = self.win_target
+                choice_descriptions.append(f"Reached {self.win_target} points, ending turn.")
                 break
             
             # Remove kept dice from the pool

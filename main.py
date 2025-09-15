@@ -124,67 +124,87 @@ class DiceCalculatorApp:
         frame = ttk.Frame(self.single_combo_tab, padding=PADDING)
         frame.pack(fill="both", expand=True)
 
-        input_frame = ttk.LabelFrame(frame, text="Select Dice for Each Position (1-6)", padding=PADDING)
-        input_frame.pack(fill="x", pady=(0, 10))
+        # Top: consolidated settings area
+        control_frame = ttk.LabelFrame(frame, text="Simulation & Banking Settings", padding=PADDING)
+        control_frame.pack(fill="x", pady=(0, 10))
+        row1 = ttk.Frame(control_frame)
+        row1.pack(fill="x", pady=2)
+        row2 = ttk.Frame(control_frame)
+        row2.pack(fill="x", pady=2)
+        row3 = ttk.Frame(control_frame)
+        row3.pack(fill="x", pady=2)
+
+        # Initialize control booleans used by checkbuttons
+        # These were previously created in the old layout; we recreate them here explicitly
+        if not hasattr(self, 'single_reset_on_refresh_var'):
+            self.single_reset_on_refresh_var = tk.BooleanVar(value=True)
+        if not hasattr(self, 'single_no_bank_on_clear_var'):
+            self.single_no_bank_on_clear_var = tk.BooleanVar(value=True)
+        if not hasattr(self, 'single_show_debug_var'):
+            self.single_show_debug_var = tk.BooleanVar(value=True)
+
+        # Row 1: Simulations, Win Target
+        ttk.Label(row1, text="Simulations:").grid(row=0, column=0, sticky="e")
+        self.single_sim_count_var = tk.StringVar(value="5000")
+        self.single_sim_entry = ttk.Spinbox(row1, from_=100, to=1000000, increment=100,
+                                            width=10, textvariable=self.single_sim_count_var)
+        self.single_sim_entry.grid(row=0, column=1, sticky="w", padx=(5, 15))
+
+        ttk.Label(row1, text="Win Target:").grid(row=0, column=2, sticky="e")
+        self.single_win_target_var = tk.StringVar(value="8000")
+        self.single_win_target_entry = ttk.Spinbox(row1, from_=500, to=20000, increment=250,
+                                                   width=10, textvariable=self.single_win_target_var)
+        self.single_win_target_entry.grid(row=0, column=3, sticky="w", padx=(5, 15))
+
+        # Row 2: Banking rules (minimum bank)
+        ttk.Label(row2, text="Minimum Bank Value:").grid(row=0, column=0, sticky="e")
+        self.single_min_bank_var = tk.StringVar(value="500")
+        self.single_min_bank_entry = ttk.Spinbox(row2, from_=0, to=10000, increment=50,
+                                                 width=10, textvariable=self.single_min_bank_var)
+        self.single_min_bank_entry.grid(row=0, column=1, sticky="w", padx=(5, 15))
+
+        ttk.Label(row2, text="Apply to first N rolls:").grid(row=0, column=2, sticky="e")
+        self.single_min_bank_rolls_var = tk.StringVar(value="2")
+        self.single_min_bank_rolls_entry = ttk.Spinbox(row2, from_=0, to=10, increment=1,
+                                                       width=6, textvariable=self.single_min_bank_rolls_var)
+        self.single_min_bank_rolls_entry.grid(row=0, column=3, sticky="w", padx=(5, 15))
+
+        ttk.Checkbutton(
+            row2,
+            text="Apply after refresh",
+            variable=self.single_reset_on_refresh_var
+        ).grid(row=0, column=4, sticky="w", padx=(5, 15))
+
+        # Row 3: Behavior & diagnostics
+        ttk.Checkbutton(
+            row3,
+            text="Don't bank if all dice used",
+            variable=self.single_no_bank_on_clear_var
+        ).grid(row=0, column=0, sticky="w")
+
+        ttk.Label(row3, text="Bank when X or fewer dice remain:").grid(row=0, column=1, sticky="e", padx=(15, 0))
+        self.single_bank_if_dice_below_var = tk.StringVar(value="0")
+        self.single_bank_if_dice_below_entry = ttk.Spinbox(row3, from_=0, to=5, increment=1,
+                                                           width=6, textvariable=self.single_bank_if_dice_below_var)
+        self.single_bank_if_dice_below_entry.grid(row=0, column=2, sticky="w", padx=(5, 15))
+
+        ttk.Checkbutton(
+            row3,
+            text="Show decision breakdown",
+            variable=self.single_show_debug_var
+        ).grid(row=0, column=3, sticky="w", padx=(10, 0))
 
         # Inventory enforcement
         self.single_respect_inventory_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(
-            input_frame,
+            row3,
             text="Respect Inventory Quantities",
             variable=self.single_respect_inventory_var
-        ).grid(row=0, column=0, sticky="w", padx=(0, 10))
+        ).grid(row=0, column=4, sticky="w", padx=(15, 0))
 
-        # Simulation count
-        ttk.Label(input_frame, text="Simulations:").grid(row=0, column=1, sticky="e")
-        self.single_sim_count_var = tk.StringVar(value="5000")
-        self.single_sim_entry = ttk.Spinbox(input_frame, from_=100, to=1000000, increment=100,
-                                            width=10, textvariable=self.single_sim_count_var)
-        self.single_sim_entry.grid(row=0, column=2, sticky="w", padx=(5, 10))
-
-        # Minimum bank settings
-        ttk.Label(input_frame, text="Minimum Bank Value:").grid(row=0, column=3, sticky="e")
-        self.single_min_bank_var = tk.StringVar(value="500")
-        self.single_min_bank_entry = ttk.Spinbox(input_frame, from_=0, to=10000, increment=50,
-                                                 width=8, textvariable=self.single_min_bank_var)
-        self.single_min_bank_entry.grid(row=0, column=4, sticky="w", padx=(5, 10))
-
-        ttk.Label(input_frame, text="Apply to first N rolls:").grid(row=0, column=5, sticky="e")
-        self.single_min_bank_rolls_var = tk.StringVar(value="2")
-        self.single_min_bank_rolls_entry = ttk.Spinbox(input_frame, from_=0, to=10, increment=1,
-                                                       width=5, textvariable=self.single_min_bank_rolls_var)
-        self.single_min_bank_rolls_entry.grid(row=0, column=6, sticky="w", padx=(5, 10))
-        
-        # Apply after refresh checkbox
-        self.single_reset_on_refresh_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(
-            input_frame,
-            text="Apply after refresh",
-            variable=self.single_reset_on_refresh_var
-        ).grid(row=1, column=5, columnspan=2, sticky="w", padx=(5, 10))
-        
-        # Bank if only X dice left
-        ttk.Label(input_frame, text="Bank when X or fewer dice remain:").grid(row=1, column=7, sticky="e")
-        self.single_bank_if_dice_below_var = tk.StringVar(value="0")
-        self.single_bank_if_dice_below_entry = ttk.Spinbox(input_frame, from_=0, to=5, increment=1,
-                                                          width=5, textvariable=self.single_bank_if_dice_below_var)
-        self.single_bank_if_dice_below_entry.grid(row=1, column=8, sticky="w", padx=(5, 10))
-
-        # Show decision breakdown
-        self.single_show_debug_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(
-            input_frame,
-            text="Show decision breakdown",
-            variable=self.single_show_debug_var
-        ).grid(row=0, column=7, sticky="w", padx=(10, 0))
-
-        # Don't bank if all dice used (continue after refresh)
-        self.single_no_bank_on_clear_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(
-            input_frame,
-            text="Don't bank if all dice used",
-            variable=self.single_no_bank_on_clear_var
-        ).grid(row=0, column=8, sticky="w", padx=(10, 0))
+        # Dice pickers section
+        input_frame = ttk.LabelFrame(frame, text="Select Dice for Each Position (1-6)", padding=PADDING)
+        input_frame.pack(fill="x", pady=(0, 10))
 
         # Dice selectors (1..6)
         ttk.Label(input_frame, text="Pick dice for each slot:").grid(row=1, column=0, columnspan=3, sticky="w", pady=(10, 5))
@@ -278,6 +298,11 @@ class DiceCalculatorApp:
                     simulator.no_bank_on_clear = bool(self.single_no_bank_on_clear_var.get())
                     # Apply reset-count-on-refresh rule
                     simulator.reset_count_on_refresh = bool(self.single_reset_on_refresh_var.get())
+                    # Apply win target
+                    try:
+                        simulator.win_target = int(self.single_win_target_var.get())
+                    except Exception:
+                        simulator.win_target = 8000
                     # Apply bank-if-dice-below rule
                     try:
                         bank_if_below = int(self.single_bank_if_dice_below_var.get())
@@ -323,6 +348,10 @@ class DiceCalculatorApp:
             bank_if_below = int(self.single_bank_if_dice_below_var.get())
         except Exception:
             bank_if_below = 0
+        try:
+            win_target = int(self.single_win_target_var.get())
+        except Exception:
+            win_target = 8000
             
         if 'avg_score' in stats:
             self.single_results_text.insert(tk.END, f"Average Score Per Turn: {stats.get('avg_score', 0):.2f}\n")
@@ -357,6 +386,7 @@ class DiceCalculatorApp:
         self.single_results_text.insert(tk.END, f"  Simulations: {sim_count}\n")
         self.single_results_text.insert(tk.END, f"  Minimum Bank Value: {min_bank}\n")
         self.single_results_text.insert(tk.END, f"  Apply to first N rolls: {first_n}\n")
+        self.single_results_text.insert(tk.END, f"  Win Target: {win_target}\n")
         self.single_results_text.insert(tk.END, f"  Apply after refresh: {'Yes' if self.single_reset_on_refresh_var.get() else 'No'}\n")
         self.single_results_text.insert(tk.END, f"  Don't bank if all dice used: {'Yes' if self.single_no_bank_on_clear_var.get() else 'No'}\n")
         self.single_results_text.insert(tk.END, f"  Bank when X or fewer dice remain: {bank_if_below}\n")
