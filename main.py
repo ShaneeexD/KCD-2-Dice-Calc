@@ -305,7 +305,25 @@ class DiceCalculatorApp:
     def _update_single_combo_results(self, selected_names, stats):
         """Render results from a single combo simulation."""
         self.single_results_text.delete(1.0, tk.END)
-        self.single_results_text.insert(tk.END, f"Combination: {', '.join(selected_names)}\n\n")
+        self.single_results_text.insert(tk.END, f"Combination: {', '.join(selected_names)}\n")
+        # Settings summary for reproducibility
+        try:
+            sim_count = int(self.single_sim_count_var.get())
+        except Exception:
+            sim_count = 0
+        try:
+            min_bank = int(self.single_min_bank_var.get())
+        except Exception:
+            min_bank = 0
+        try:
+            first_n = int(self.single_min_bank_rolls_var.get())
+        except Exception:
+            first_n = 0
+        try:
+            bank_if_below = int(self.single_bank_if_dice_below_var.get())
+        except Exception:
+            bank_if_below = 0
+            
         if 'avg_score' in stats:
             self.single_results_text.insert(tk.END, f"Average Score Per Turn: {stats.get('avg_score', 0):.2f}\n")
         self.single_results_text.insert(tk.END, f"Expected Score: {stats.get('expected_value', 0):.2f}\n")
@@ -332,6 +350,16 @@ class DiceCalculatorApp:
         max_score = stats.get('max_score')
         if max_score is not None:
             self.single_results_text.insert(tk.END, f"\nMax Score Observed: {max_score}\n")
+
+        self.single_results_text.insert(tk.END, "\n")
+
+        self.single_results_text.insert(tk.END, "Settings Used:\n")
+        self.single_results_text.insert(tk.END, f"  Simulations: {sim_count}\n")
+        self.single_results_text.insert(tk.END, f"  Minimum Bank Value: {min_bank}\n")
+        self.single_results_text.insert(tk.END, f"  Apply to first N rolls: {first_n}\n")
+        self.single_results_text.insert(tk.END, f"  Apply after refresh: {'Yes' if self.single_reset_on_refresh_var.get() else 'No'}\n")
+        self.single_results_text.insert(tk.END, f"  Don't bank if all dice used: {'Yes' if self.single_no_bank_on_clear_var.get() else 'No'}\n")
+        self.single_results_text.insert(tk.END, f"  Bank when X or fewer dice remain: {bank_if_below}\n")
 
         self.single_progress_var.set(100)
         self.single_run_button.config(state="normal")
