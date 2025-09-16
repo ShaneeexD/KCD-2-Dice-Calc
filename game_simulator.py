@@ -48,12 +48,14 @@ class GameSimulator:
         win_target: int = 8000,
         ai_profile: str = "priest",
         alternate_first: bool = True,
+        player_settings: Optional[Dict[str, int | bool]] = None,
     ) -> None:
         self.player_dice = list(player_dice)
         self.ai_dice = list(ai_dice)
         self.win_target = int(win_target)
         self.ai_profile_name = ai_profile
         self.alternate_first = alternate_first
+        self.player_settings: Optional[Dict[str, int | bool]] = player_settings
 
     def _configure_sim(self, sim: DiceSimulator, profile: Dict[str, int | bool]) -> None:
         sim.bank_min_value = int(profile.get("bank_min_value", 0)) if profile.get("bank_min_value") else None
@@ -70,8 +72,12 @@ class GameSimulator:
         if profile is not None:
             self._configure_sim(sim, profile)
         else:
-            # Player defaults: use the same baseline as Single Combo (no extra constraints)
-            sim.win_target = int(self.win_target)
+            # Player: apply provided Single Combo settings if available
+            if self.player_settings:
+                self._configure_sim(sim, self.player_settings)
+            else:
+                # Fallback baseline: only win target
+                sim.win_target = int(self.win_target)
         score, did_bust, rolls, turn_log = sim._simulate_turn_with_optimal_choices(dice, debug=False)
         if capture_log:
             return {

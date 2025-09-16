@@ -648,7 +648,22 @@ class DiceCalculatorApp:
 
         def worker():
             try:
-                sim = GameSimulator(player_dice, ai_dice, win_target=win_target, ai_profile=profile)
+                # Build player settings from Single Combo tab
+                player_settings = {
+                    "bank_min_value": int(self.single_min_bank_var.get() or 0) or None,
+                    "bank_min_applies_first_n_rolls": int(self.single_min_bank_rolls_var.get() or 0) or None,
+                    "no_bank_on_clear": bool(self.single_no_bank_on_clear_var.get()),
+                    "reset_count_on_refresh": bool(self.single_reset_on_refresh_var.get()),
+                    "bank_if_dice_below": max(0, min(5, int(self.single_bank_if_dice_below_var.get() or 0))),
+                }
+
+                sim = GameSimulator(
+                    player_dice,
+                    ai_dice,
+                    win_target=win_target,
+                    ai_profile=profile,
+                    player_settings=player_settings,
+                )
 
                 def progress(done: int, total: int):
                     pct = 0 if total <= 0 else (done / total) * 100.0
