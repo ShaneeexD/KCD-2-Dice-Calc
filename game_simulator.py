@@ -167,10 +167,8 @@ class GameSimulator:
                 pass
 
         for i in range(n_games):
-            if self.alternate_first:
-                first = "player" if (i % 2 == 0) else "ai"
-            else:
-                first = random.choice(["player", "ai"])  # slight randomization
+            # Player always goes first (matches game rules)
+            first = "player"
 
             need_example = (example_win is None) or (example_loss is None)
             result = self.play_game(first=first, collect_log=need_example)
