@@ -601,6 +601,12 @@ class DiceCalculatorApp:
         ctrl.pack(fill="x", pady=(0, 8))
         ttk.Button(ctrl, text="Load Player Dice from Game Simulator", command=self.load_playbook_from_game).pack(side="left")
         ttk.Button(ctrl, text="Reset Turn", command=self.playbook_reset_turn).pack(side="left", padx=(8, 0))
+        ttk.Button(ctrl, text="Full Reset", command=self.playbook_full_reset).pack(side="left", padx=(8, 0))
+        ttk.Label(ctrl, text="Game point limit:").pack(side="left", padx=(16, 4))
+        self.playbook_game_limit_var = tk.StringVar(value="8000")
+        self.playbook_game_limit_entry = ttk.Spinbox(ctrl, from_=500, to=20000, increment=250, width=8,
+                                                     textvariable=self.playbook_game_limit_var)
+        self.playbook_game_limit_entry.pack(side="left")
 
         # Player dice selection for Play Book
         dice_box = ttk.LabelFrame(frame, text="Player Dice (6) for this turn", padding=PADDING)
@@ -620,12 +626,15 @@ class DiceCalculatorApp:
         self.playbook_total_var = tk.StringVar(value="0")
         self.playbook_roll_var = tk.StringVar(value="1")
         self.playbook_dice_left_var = tk.StringVar(value="6")
+        self.playbook_overall_score_var = tk.StringVar(value="0")
         ttk.Label(status, text="Total so far:").grid(row=0, column=0, sticky="e")
         ttk.Label(status, textvariable=self.playbook_total_var).grid(row=0, column=1, sticky="w", padx=(6, 20))
         ttk.Label(status, text="Roll #:").grid(row=0, column=2, sticky="e")
         ttk.Label(status, textvariable=self.playbook_roll_var).grid(row=0, column=3, sticky="w", padx=(6, 20))
         ttk.Label(status, text="Dice to roll:").grid(row=0, column=4, sticky="e")
-        ttk.Label(status, textvariable=self.playbook_dice_left_var).grid(row=0, column=5, sticky="w", padx=(6, 0))
+        ttk.Label(status, textvariable=self.playbook_dice_left_var).grid(row=0, column=5, sticky="w", padx=(6, 20))
+        ttk.Label(status, text="Overall score:").grid(row=0, column=6, sticky="e")
+        ttk.Label(status, textvariable=self.playbook_overall_score_var).grid(row=0, column=7, sticky="w", padx=(6, 0))
 
         # Enter roll values
         roll_frame = ttk.LabelFrame(frame, text="Enter your current roll values (1-6)", padding=PADDING)
@@ -695,8 +704,16 @@ class DiceCalculatorApp:
         n = len(self.playbook_current_dice) if self.playbook_current_dice else self.playbook_total_dice
         n = max(1, min(6, n))
         for i in range(n):
-            ttk.Label(self.playbook_roll_frame, text=f"Die {i+1}:").grid(row=0, column=i*2, sticky="e")
-            var = tk.StringVar(value="")
+            # Label each input with the die's name if available, else generic
+            die_name = None
+            try:
+                die_name = getattr(self.playbook_current_dice[i], 'name', None)
+            except Exception:
+                die_name = None
+            label_text = die_name if die_name else f"Die {i+1}"
+            ttk.Label(self.playbook_roll_frame, text=label_text).grid(row=0, column=i*2, sticky="e")
+            # Default to 1 to avoid empty values causing parse errors
+            var = tk.StringVar(value="1")
             spin = ttk.Spinbox(self.playbook_roll_frame, from_=1, to=6, width=4, textvariable=var)
             spin.grid(row=0, column=i*2+1, sticky="w", padx=(4, 10))
             self.playbook_roll_vars.append(var)
@@ -728,6 +745,18 @@ class DiceCalculatorApp:
         self.playbook_text.delete(1.0, tk.END)
         self.playbook_text.insert(tk.END, "Play Book reset. Enter your first roll and click 'Suggest Best Keep'.\n")
         self._playbook_render_roll_inputs()
+
+    def playbook_full_reset(self):
+        """Reset overall score and the current turn state in the Play Book."""
+        # Reset overall score
+        self.playbook_overall_score_var.set("0")
+        # Clear log and reset turn state
+        try:
+            self.playbook_text.delete(1.0, tk.END)
+        except Exception:
+            pass
+        self.playbook_reset_turn()
+        self.playbook_text.insert(tk.END, "Overall score reset to 0.\n")
 
     def playbook_suggest_best(self):
         # Parse roll values
@@ -775,6 +804,16 @@ class DiceCalculatorApp:
         for i in range(min(n_curr, len(self.playbook_current_dice))):
             nm = getattr(self.playbook_current_dice[i], 'name', f'Die{i+1}')
             name_map.append(f"{labels[i]}={_abbr(nm)}")
+        # Parse current overall and game limit for win-target banking
+        try:
+            overall_score = int(self.playbook_overall_score_var.get() or 0)
+        except Exception:
+            overall_score = 0
+        try:
+            game_limit = int(self.playbook_game_limit_var.get() or 8000)
+        except Exception:
+            game_limit = 8000
+
         for opt in options[:k]:
             kept_idx, score, ev_heur, desc = opt
             bank_choice = (desc == "Bank after keep") or desc.startswith("Bank after keep (forced")
@@ -782,6 +821,12 @@ class DiceCalculatorApp:
             precise_ev = float(score)
             bust_rate = 0.0
             future_added = 0.0
+
+            # If banking now (after this keep) would reach or exceed the game limit, force a bank suggestion
+            projected_total_if_bank = overall_score + self.playbook_current_total + int(score)
+            if projected_total_if_bank >= game_limit:
+                bank_choice = True
+                desc = "Bank after keep (win target)"
 
             if not bank_choice:
                 # Build remaining dice after keeping kept_idx (indices align with current_dice ordering)
@@ -812,7 +857,8 @@ class DiceCalculatorApp:
                 "ev_precise": precise_ev,
                 "bust_rate": bust_rate,
                 "future_added": future_added,
-                "opt": opt,
+                # store updated desc in opt clone for apply path
+                "opt": (kept_idx, score, ev_heur, desc),
             })
 
         # Risk-aware ranking: EV - risk_penalty * bust_rate
@@ -859,7 +905,7 @@ class DiceCalculatorApp:
         self.playbook_current_total += int(score)
         self.playbook_text.insert(tk.END, f"Applied: kept {kept_vals} (+{score}). Total = {self.playbook_current_total}. {desc}\n")
         # Determine banking
-        bank = (desc == "Bank after keep") or desc.startswith("Bank after keep (forced")
+        bank = (desc == "Bank after keep") or desc.startswith("Bank after keep (forced") or desc.startswith("Bank after keep (win target")
         # Update current dice by removing kept indices from current roll mapping
         n = len(self.playbook_current_dice) if self.playbook_current_dice else self.playbook_total_dice
         remaining_indices = [i for i in range(n) if i not in kept_idx]
@@ -870,6 +916,20 @@ class DiceCalculatorApp:
         if bank:
             self.playbook_text.insert(tk.END, f"Decision: BANK NOW at {self.playbook_current_total} points. Turn ends.\n")
             self.playbook_total_var.set(str(self.playbook_current_total))
+            # Add to overall score
+            try:
+                overall = int(self.playbook_overall_score_var.get() or 0)
+            except Exception:
+                overall = 0
+            overall += int(self.playbook_current_total)
+            self.playbook_overall_score_var.set(str(overall))
+            # Notify if reaching limit
+            try:
+                limit = int(self.playbook_game_limit_var.get() or 8000)
+            except Exception:
+                limit = 8000
+            if overall >= limit:
+                self.playbook_text.insert(tk.END, f"Reached or exceeded game limit ({limit}).\n")
             # Typically start a new turn after bank; keep state but reset for next turn
             self.playbook_current_total = 0
             self.playbook_roll_index = 1
@@ -915,6 +975,19 @@ class DiceCalculatorApp:
     def playbook_bank_now(self):
         self.playbook_text.insert(tk.END, f"Manual decision: BANK NOW at {self.playbook_current_total} points. Turn ends.\n")
         self.playbook_total_var.set(str(self.playbook_current_total))
+        # Add to overall
+        try:
+            overall = int(self.playbook_overall_score_var.get() or 0)
+        except Exception:
+            overall = 0
+        overall += int(self.playbook_current_total)
+        self.playbook_overall_score_var.set(str(overall))
+        try:
+            limit = int(self.playbook_game_limit_var.get() or 8000)
+        except Exception:
+            limit = 8000
+        if overall >= limit:
+            self.playbook_text.insert(tk.END, f"Reached or exceeded game limit ({limit}).\n")
         # Reset for next turn
         self.playbook_current_total = 0
         self.playbook_roll_index = 1
