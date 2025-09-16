@@ -571,7 +571,17 @@ class DiceCalculatorApp:
         # Results area
         results_frame = ttk.LabelFrame(frame, text="Game Simulation Results", padding=PADDING)
         results_frame.pack(fill="both", expand=True)
-        self.game_results_text = tk.Text(results_frame, height=14, wrap="word")
+        # Progress UI
+        prog_row = ttk.Frame(results_frame)
+        prog_row.pack(fill="x", pady=(0, 6))
+        ttk.Label(prog_row, text="Progress:").pack(side="left")
+        self.game_progress_var = tk.DoubleVar(value=0)
+        self.game_progress_bar = ttk.Progressbar(prog_row, variable=self.game_progress_var, maximum=100)
+        self.game_progress_bar.pack(side="left", fill="x", expand=True, padx=(6, 6))
+        self.game_status_var = tk.StringVar(value="Idle")
+        ttk.Label(prog_row, textvariable=self.game_status_var).pack(side="left")
+
+        self.game_results_text = tk.Text(results_frame, height=18, wrap="word")
         self.game_results_text.pack(fill="both", expand=True)
 
     def randomize_ai_dice(self):
@@ -633,11 +643,21 @@ class DiceCalculatorApp:
         self.run_game_sim_btn.config(state="disabled")
         self.game_results_text.delete(1.0, tk.END)
         self.game_results_text.insert(tk.END, "Running game simulations...\n")
+        self.game_progress_var.set(0)
+        self.game_status_var.set("0%")
 
         def worker():
             try:
                 sim = GameSimulator(player_dice, ai_dice, win_target=win_target, ai_profile=profile)
-                stats = sim.simulate_games(n_games=n_games)
+
+                def progress(done: int, total: int):
+                    pct = 0 if total <= 0 else (done / total) * 100.0
+                    self.root.after(0, lambda p=pct, d=done, t=total: [
+                        self.game_progress_var.set(p),
+                        self.game_status_var.set(f"{d}/{t} ({p:.1f}%)")
+                    ])
+
+                stats = sim.simulate_games(n_games=n_games, progress_fn=progress)
                 self.root.after(0, lambda: self._update_game_sim_results(player_names, ai_names, stats))
             except Exception as e:
                 err_msg = str(e)
@@ -668,9 +688,21 @@ class DiceCalculatorApp:
             for k, v in sorted(length_dist.items(), key=lambda x: x[0])[:10]:
                 self.game_results_text.insert(tk.END, f"  {k}: {v:.2f}%\n")
 
+        # Example detailed logs
+        ex_win = stats.get('example_player_win')
+        ex_loss = stats.get('example_player_loss')
+        if ex_win:
+            self.game_results_text.insert(tk.END, "\nExample game (Player WIN):\n")
+            self.game_results_text.insert(tk.END, ex_win + "\n")
+        if ex_loss:
+            self.game_results_text.insert(tk.END, "\nExample game (Player LOSS):\n")
+            self.game_results_text.insert(tk.END, ex_loss + "\n")
+
         self.game_results_text.insert(tk.END, f"\nElapsed: {stats.get('elapsed_sec', 0.0):.2f}s\n")
 
         self.run_game_sim_btn.config(state="normal")
+        self.game_status_var.set("Done")
+        self.game_progress_var.set(100)
     
     def setup_inventory_tab(self):
         """Set up the Inventory tab."""
