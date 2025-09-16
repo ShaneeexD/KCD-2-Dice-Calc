@@ -639,7 +639,22 @@ class DiceCalculatorApp:
         actions.pack(fill="x", pady=(0, 8))
         ttk.Button(actions, text="Suggest Best Keep", command=self.playbook_suggest_best).pack(side="left")
         ttk.Button(actions, text="Apply Top Suggestion", command=self.playbook_apply_top).pack(side="left", padx=(8, 0))
-        ttk.Button(actions, text="Bank Now", command=self.playbook_bank_now).pack(side="left", padx=(8, 0))
+        ttk.Button(actions, text="Bank Now", command=self.playbook_bank_now).pack(side="left", padx=(8, 16))
+
+        # Risk aversion control: penalty (points) per 100% bust probability
+        ttk.Label(actions, text="Risk penalty:").pack(side="left")
+        self.playbook_risk_penalty_var = tk.StringVar(value="400")
+        self.playbook_risk_penalty = ttk.Spinbox(actions, from_=0, to=2000, increment=50, width=7,
+                                                 textvariable=self.playbook_risk_penalty_var)
+        self.playbook_risk_penalty.pack(side="left", padx=(4, 16))
+        add_tooltip(self.playbook_risk_penalty, "Subtract this many points from EV for 100% bust risk (scaled by bust%). Higher = more risk-averse.")
+
+        # Buttons to apply any of the top 5 suggestions directly
+        self.playbook_apply_btns = []
+        for i in range(1, 6):
+            btn = ttk.Button(actions, text=f"Apply #{i}", command=lambda idx=i: self.playbook_apply_index(idx-1))
+            btn.pack(side="left", padx=(4, 0))
+            self.playbook_apply_btns.append(btn)
 
         # Suggestions / log
         log_frame = ttk.LabelFrame(frame, text="Suggestions & Log", padding=PADDING)
@@ -654,6 +669,8 @@ class DiceCalculatorApp:
         self.playbook_current_total: int = 0
         self.playbook_roll_index: int = 1
         self.playbook_last_suggestion: Optional[tuple] = None
+        self.playbook_last_options: Optional[List[Dict]] = None
+        self.playbook_last_roll: Optional[List[int]] = None
         self._playbook_refresh_dice_from_selectors()
         self._playbook_render_roll_inputs()
 
@@ -750,6 +767,14 @@ class DiceCalculatorApp:
         k = min(10, len(options))
         evaluated = []  # list of dicts with detailed info
         n_curr = len(self.playbook_current_dice) if self.playbook_current_dice else self.playbook_total_dice
+        # Build compact dice labels for this roll (D1..Dn) and a short name map
+        labels = [f"D{i+1}" for i in range(n_curr)]
+        def _abbr(name: str, limit: int = 10) -> str:
+            return name if len(name) <= limit else (name[:limit] + "…")
+        name_map = []
+        for i in range(min(n_curr, len(self.playbook_current_dice))):
+            nm = getattr(self.playbook_current_dice[i], 'name', f'Die{i+1}')
+            name_map.append(f"{labels[i]}={_abbr(nm)}")
         for opt in options[:k]:
             kept_idx, score, ev_heur, desc = opt
             bank_choice = (desc == "Bank after keep") or desc.startswith("Bank after keep (forced")
@@ -790,24 +815,38 @@ class DiceCalculatorApp:
                 "opt": opt,
             })
 
-        # Sort by precise EV desc
-        evaluated.sort(key=lambda x: x["ev_precise"], reverse=True)
+        # Risk-aware ranking: EV - risk_penalty * bust_rate
+        try:
+            risk_penalty = float(self.playbook_risk_penalty_var.get())
+        except Exception:
+            risk_penalty = 0.0
+        for info in evaluated:
+            info["rank_score"] = float(info["ev_precise"]) - risk_penalty * float(info["bust_rate"])  # bust_rate is 0..1
+        evaluated.sort(key=lambda x: (x["rank_score"]), reverse=True)
         best = evaluated[0]
         self.playbook_last_suggestion = (best["opt"], roll)
+        self.playbook_last_options = evaluated
+        self.playbook_last_roll = list(roll)
 
         # Render suggestions
-        self.playbook_text.insert(tk.END, "Top suggestions (precise EV):\n")
+        if name_map:
+            self.playbook_text.insert(tk.END, "Dice map: " + ", ".join(name_map) + "\n")
+        self.playbook_text.insert(tk.END, "Top suggestions (risk-adjusted):\n")
         for i, info in enumerate(evaluated[:5], start=1):
-            kept_vals = info["kept_vals"]
+            kept_idx = info["kept_idx"]
+            # kept_idx may be a set; sort indices to safely index labels/roll
+            idx_list = sorted(list(kept_idx))
+            kept_display = [f"{roll[j]}({labels[j]})" for j in idx_list]
             score = info["score"]
             desc = info["desc"]
             evp = info["ev_precise"]
             add_future = info["future_added"]
             bust = info["bust_rate"] * 100.0
+            rank_score = info.get("rank_score", evp)
             if desc == "Bank after keep" or desc.startswith("Bank after keep (forced"):
-                self.playbook_text.insert(tk.END, f"  {i}. Keep {kept_vals} for {score} pts -> BANK, EV(total add) {evp:.1f}\n")
+                self.playbook_text.insert(tk.END, f"  {i}. Keep {kept_display} for {score} pts -> BANK, EV {evp:.1f}, score {rank_score:.1f}\n")
             else:
-                self.playbook_text.insert(tk.END, f"  {i}. Keep {kept_vals} for {score} pts -> CONT, future +{add_future:.1f}, EV(total add) {evp:.1f}, bust {bust:.1f}%\n")
+                self.playbook_text.insert(tk.END, f"  {i}. Keep {kept_display} for {score} pts -> CONT, future +{add_future:.1f}, EV {evp:.1f}, bust {bust:.1f}%, score {rank_score:.1f}\n")
         self.playbook_text.see(tk.END)
 
     def playbook_apply_top(self):
@@ -854,6 +893,24 @@ class DiceCalculatorApp:
         self._playbook_render_roll_inputs()
         self.playbook_text.insert(tk.END, "Enter next roll values and suggest again.\n")
         self.playbook_text.see(tk.END)
+
+    def playbook_apply_index(self, index: int):
+        """Apply a specific option from the last evaluated list (0-based index)."""
+        opts = self.playbook_last_options
+        if not opts or index < 0 or index >= len(opts):
+            messagebox.showwarning("No Suggestion", "No evaluated options available. Click 'Suggest Best Keep' first.")
+            return
+        info = opts[index]
+        # Use the last evaluated roll if available
+        roll = self.playbook_last_roll
+        if roll is None:
+            try:
+                roll = [int(v.get()) for v in self.playbook_roll_vars]
+            except Exception:
+                roll = []
+        self.playbook_last_suggestion = (info["opt"], roll)
+        # Reuse the same apply path
+        self.playbook_apply_top()
 
     def playbook_bank_now(self):
         self.playbook_text.insert(tk.END, f"Manual decision: BANK NOW at {self.playbook_current_total} points. Turn ends.\n")
