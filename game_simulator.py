@@ -17,45 +17,6 @@ from turn_simulator import DiceSimulator
 
 # Difficulty profiles (no badges). See AI_BEHAVIOR.md for details.
 AI_PROFILES: Dict[str, Dict[str, int | bool]] = {
-    # very cautious
-    "beggar": {
-        "bank_min_value": 300,
-        "bank_min_applies_first_n_rolls": 3,
-        "bank_if_dice_below": 2,
-        "no_bank_on_clear": False,
-        "reset_count_on_refresh": True,
-    },
-    # cautious
-    "novice": {
-        "bank_min_value": 400,
-        "bank_min_applies_first_n_rolls": 2,
-        "bank_if_dice_below": 2,
-        "no_bank_on_clear": False,
-        "reset_count_on_refresh": True,
-    },
-    # moderate-cautious
-    "farmer": {
-        "bank_min_value": 450,
-        "bank_min_applies_first_n_rolls": 2,
-        "bank_if_dice_below": 1,
-        "no_bank_on_clear": False,
-        "reset_count_on_refresh": True,
-    },
-    "miner": {
-        "bank_min_value": 450,
-        "bank_min_applies_first_n_rolls": 2,
-        "bank_if_dice_below": 1,
-        "no_bank_on_clear": False,
-        "reset_count_on_refresh": True,
-    },
-    # balanced
-    "soldier": {
-        "bank_min_value": 500,
-        "bank_min_applies_first_n_rolls": 2,
-        "bank_if_dice_below": 1,
-        "no_bank_on_clear": True,
-        "reset_count_on_refresh": True,
-    },
     # Accurate
     "priest": {
         "bank_min_value": 500,
@@ -63,67 +24,7 @@ AI_PROFILES: Dict[str, Dict[str, int | bool]] = {
         "bank_if_dice_below": 0,
         "no_bank_on_clear": True,
         "reset_count_on_refresh": True,
-    },
-    # moderate-aggressive
-    "knight": {
-        "bank_min_value": 550,
-        "bank_min_applies_first_n_rolls": 2,
-        "bank_if_dice_below": 1,
-        "no_bank_on_clear": True,
-        "reset_count_on_refresh": True,
-    },
-    "craftsman": {
-        "bank_min_value": 550,
-        "bank_min_applies_first_n_rolls": 2,
-        "bank_if_dice_below": 1,
-        "no_bank_on_clear": True,
-        "reset_count_on_refresh": True,
-    },
-    "wagoner": {
-        "bank_min_value": 550,
-        "bank_min_applies_first_n_rolls": 2,
-        "bank_if_dice_below": 1,
-        "no_bank_on_clear": True,
-        "reset_count_on_refresh": True,
-    },
-    "courtier": {
-        "bank_min_value": 550,
-        "bank_min_applies_first_n_rolls": 2,
-        "bank_if_dice_below": 1,
-        "no_bank_on_clear": True,
-        "reset_count_on_refresh": True,
-    },
-    # aggressive
-    "cardinal": {
-        "bank_min_value": 600,
-        "bank_min_applies_first_n_rolls": 2,
-        "bank_if_dice_below": 0,
-        "no_bank_on_clear": True,
-        "reset_count_on_refresh": True,
-    },
-    "lord": {
-        "bank_min_value": 600,
-        "bank_min_applies_first_n_rolls": 2,
-        "bank_if_dice_below": 0,
-        "no_bank_on_clear": True,
-        "reset_count_on_refresh": True,
-    },
-    # very aggressive
-    "king": {
-        "bank_min_value": 650,
-        "bank_min_applies_first_n_rolls": 1,
-        "bank_if_dice_below": 0,
-        "no_bank_on_clear": True,
-        "reset_count_on_refresh": True,
-    },
-    # max-aggressive
-    "emperor": {
-        "bank_min_value": 700,
-        "bank_min_applies_first_n_rolls": 1,
-        "bank_if_dice_below": 0,
-        "no_bank_on_clear": True,
-        "reset_count_on_refresh": True,
-    },
+    }
 }
 
 
@@ -144,7 +45,7 @@ class GameSimulator:
         player_dice: List[Die],
         ai_dice: List[Die],
         win_target: int = 8000,
-        ai_profile: str = "novice",
+        ai_profile: str = "priest",
         alternate_first: bool = True,
     ) -> None:
         self.player_dice = list(player_dice)
@@ -177,7 +78,7 @@ class GameSimulator:
         player_total = 0
         ai_total = 0
         turns = 0
-        ai_profile = AI_PROFILES.get(self.ai_profile_name, AI_PROFILES["novice"])
+        ai_profile = AI_PROFILES.get(self.ai_profile_name, AI_PROFILES["priest"])
 
         current = first
         while player_total < self.win_target and ai_total < self.win_target:

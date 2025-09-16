@@ -313,6 +313,12 @@ class DiceCalculatorApp:
         self.single_run_button = ttk.Button(frame, text="Run Single Combo Simulation", command=self.run_single_combo)
         self.single_run_button.pack(pady=10)
 
+        # Send to Game Simulator (always enabled; validates selection on click)
+        self.single_send_to_game_button = ttk.Button(frame, text="Send to Game Simulator",
+                                                     command=self.send_to_game_from_single)
+        self.single_send_to_game_button.pack(pady=(0, 10))
+        add_tooltip(self.single_send_to_game_button, "Open the Game Simulator with these six dice as Player dice.")
+
         # Results
         results_frame = ttk.LabelFrame(frame, text="Single Combo Results", padding=PADDING)
         results_frame.pack(fill="both", expand=True)
@@ -407,8 +413,9 @@ class DiceCalculatorApp:
                     )
                     self.root.after(0, lambda: self._update_single_combo_results(selected_names, stats))
                 except Exception as e:
-                    self.root.after(0, lambda: [
-                        messagebox.showerror("Simulation Error", str(e)),
+                    err_msg = str(e)
+                    self.root.after(0, lambda msg=err_msg: [
+                        messagebox.showerror("Simulation Error", msg),
                         self.single_run_button.config(state="normal")
                     ])
 
@@ -509,7 +516,7 @@ class DiceCalculatorApp:
         ttk.Label(row1, text="AI Profile:").grid(row=0, column=0, sticky="e")
         self.ai_profile_var = tk.StringVar(value=sorted(AI_PROFILES.keys())[0])
         self.ai_profile_box = ttk.Combobox(row1, values=sorted(AI_PROFILES.keys()), width=20,
-                                           textvariable=self.ai_profile_var, state="readonly")
+                                           textvariable=self.ai_profile_var, state="disabled")
         self.ai_profile_box.grid(row=0, column=1, sticky="w", padx=(5, 15))
         add_tooltip(self.ai_profile_box, "Select the AI difficulty profile (no badges). See AI_BEHAVIOR.md for details.")
 
@@ -615,6 +622,12 @@ class DiceCalculatorApp:
             ai_dice.append(d)
 
         profile = self.ai_profile_var.get()
+        if profile not in AI_PROFILES:
+            profile = "priest"
+            try:
+                self.ai_profile_var.set("priest")
+            except Exception:
+                pass
 
         # Disable button and clear results
         self.run_game_sim_btn.config(state="disabled")
@@ -627,8 +640,9 @@ class DiceCalculatorApp:
                 stats = sim.simulate_games(n_games=n_games)
                 self.root.after(0, lambda: self._update_game_sim_results(player_names, ai_names, stats))
             except Exception as e:
-                self.root.after(0, lambda: [
-                    messagebox.showerror("Simulation Error", str(e)),
+                err_msg = str(e)
+                self.root.after(0, lambda msg=err_msg: [
+                    messagebox.showerror("Simulation Error", msg),
                     self.run_game_sim_btn.config(state="normal")
                 ])
 
@@ -837,6 +851,16 @@ class DiceCalculatorApp:
         self.send_to_single_button.grid(row=2, column=1, pady=10, sticky="w", padx=(10, 0))
         add_tooltip(self.send_to_single_button, "Open the Single Combo Simulator with the best dice pre-selected.")
         
+        # Send to Game Simulator button (disabled until a result exists)
+        self.send_to_game_button = ttk.Button(
+            input_frame,
+            text="Send to Game Simulator",
+            command=self.send_to_game_from_calculator,
+            state="disabled"
+        )
+        self.send_to_game_button.grid(row=2, column=2, pady=10, sticky="w", padx=(10, 0))
+        add_tooltip(self.send_to_game_button, "Open the Game Simulator with the best dice pre-filled as Player dice.")
+        
         # Bottom frame for results
         results_frame = ttk.LabelFrame(frame, text="Results", padding=PADDING)
         results_frame.pack(fill="both", expand=True)
@@ -913,6 +937,9 @@ class DiceCalculatorApp:
                 ordered = [best_combo[pos][0].name for pos in sorted(best_combo.keys())]
                 self.last_best_combo_names = ordered
                 self.send_to_single_button.config(state="normal")
+                # Also enable send-to-game
+                if hasattr(self, 'send_to_game_button'):
+                    self.send_to_game_button.config(state="normal")
             except Exception:
                 pass
         
@@ -1102,6 +1129,45 @@ class DiceCalculatorApp:
                         self.single_combo_boxes[i].set(name)
                     except Exception:
                         pass
+
+    def _apply_player_dice_to_game(self, names: List[str]):
+        """Helper: apply a list of 6 dice names to the Game Simulator's Player dice selectors."""
+        if not hasattr(self, 'player_combo_vars') or len(getattr(self, 'player_combo_vars', [])) < 6:
+            messagebox.showerror("Game Simulator", "Player selectors are not initialized.")
+            return False
+        all_names = set(get_all_dice_names())
+        if len(names) != 6 or any(n not in all_names for n in names):
+            messagebox.showerror("Game Simulator", "Invalid or incomplete set of 6 dice names.")
+            return False
+        for i, n in enumerate(names):
+            try:
+                self.player_combo_vars[i].set(n)
+            except Exception:
+                pass
+        return True
+
+    def send_to_game_from_calculator(self):
+        """Open Game Simulator tab with best-combination dice filled as Player dice."""
+        if not self.last_best_combo_names or len(self.last_best_combo_names) != 6:
+            messagebox.showwarning("No Combination", "Please calculate a best combination first.")
+            return
+        if self._apply_player_dice_to_game(self.last_best_combo_names):
+            try:
+                self.tab_control.select(self.game_sim_tab)
+            except Exception:
+                pass
+
+    def send_to_game_from_single(self):
+        """Open Game Simulator tab using the current Single Combo selection as Player dice."""
+        names = [v.get() for v in getattr(self, 'single_combo_vars', [])]
+        if any(not n for n in names) or len(names) != 6:
+            messagebox.showerror("Input Error", "Please select a die for all 6 positions in Single Combo.")
+            return
+        if self._apply_player_dice_to_game(names):
+            try:
+                self.tab_control.select(self.game_sim_tab)
+            except Exception:
+                pass
     
     def find_best_dice_for_positions(self, available_dice, target_numbers):
         """
@@ -1291,7 +1357,7 @@ class DiceCalculatorApp:
         self.strategy_results_text.insert(tk.END, "This will simulate thousands of turns with different strategies to find the optimal approach.\n")
         
         # Strategies comparison frame
-        strategies_frame = ttk.LabelFrame(frame, text="Strategy Comparison", padding=PADDING)
+        strategies_frame = ttk.Frame(frame)
         strategies_frame.pack(fill="both", expand=True)
         
         # Create a treeview for strategy comparison
@@ -1463,8 +1529,8 @@ class DiceCalculatorApp:
             self.root.after(0, self._update_simulation_results, result)
             
         except Exception as e:
-            # Show error on the main thread
-            self.root.after(0, lambda: messagebox.showerror("Simulation Error", str(e)))
+            err_msg = str(e)
+            self.root.after(0, lambda msg=err_msg: messagebox.showerror("Simulation Error", msg))
             self.root.after(0, lambda: self.calculate_button.config(state="normal"))
     
     def _update_simulation_results(self, result):
