@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import threading
 from collections import Counter
-from typing import List, Dict
+from typing import List, Dict, Optional, Set
 import random
 
 from dice_data import load_dice_data, get_die_by_name, get_all_dice_names, Die
@@ -100,6 +100,7 @@ class DiceCalculatorApp:
         self.strategy_tab = ttk.Frame(self.tab_control)
         self.single_combo_tab = ttk.Frame(self.tab_control)
         self.game_sim_tab = ttk.Frame(self.tab_control)
+        self.playbook_tab = ttk.Frame(self.tab_control)
         
         self.tab_control.add(self.info_tab, text="Dice Information")
         self.tab_control.add(self.inventory_tab, text="Inventory")
@@ -107,6 +108,7 @@ class DiceCalculatorApp:
         self.tab_control.add(self.strategy_tab, text="Strategy Calculator (WIP)")
         self.tab_control.add(self.single_combo_tab, text="Single Combo Simulator")
         self.tab_control.add(self.game_sim_tab, text="Game Simulator (WIP)")
+        self.tab_control.add(self.playbook_tab, text="Play Book (WIP)")
         
         self.tab_control.pack(expand=1, fill="both")
         
@@ -136,6 +138,7 @@ class DiceCalculatorApp:
         self.setup_strategy_tab()
         self.setup_single_combo_tab()
         self.setup_game_sim_tab()
+        self.setup_playbook_tab()
         # Shared state between tabs
         self.last_best_combo_names = None  # type: list[str] | None
     
@@ -568,6 +571,10 @@ class DiceCalculatorApp:
         self.run_game_sim_btn = ttk.Button(frame, text="Run Game Simulation", command=self.run_game_simulation)
         self.run_game_sim_btn.pack(pady=10)
 
+        # Send current Player dice to Play Book
+        self.send_to_playbook_btn = ttk.Button(frame, text="Send to Play Book", command=self.send_to_playbook_from_game)
+        self.send_to_playbook_btn.pack(pady=(0, 10))
+
         # Results area
         results_frame = ttk.LabelFrame(frame, text="Game Simulation Results", padding=PADDING)
         results_frame.pack(fill="both", expand=True)
@@ -583,6 +590,304 @@ class DiceCalculatorApp:
 
         self.game_results_text = tk.Text(results_frame, height=18, wrap="word")
         self.game_results_text.pack(fill="both", expand=True)
+
+    def setup_playbook_tab(self):
+        """Set up the Play Book tab to assist with real-game rolls step-by-step."""
+        frame = ttk.Frame(self.playbook_tab, padding=PADDING)
+        frame.pack(fill="both", expand=True)
+
+        # Controls row
+        ctrl = ttk.Frame(frame)
+        ctrl.pack(fill="x", pady=(0, 8))
+        ttk.Button(ctrl, text="Load Player Dice from Game Simulator", command=self.load_playbook_from_game).pack(side="left")
+        ttk.Button(ctrl, text="Reset Turn", command=self.playbook_reset_turn).pack(side="left", padx=(8, 0))
+
+        # Player dice selection for Play Book
+        dice_box = ttk.LabelFrame(frame, text="Player Dice (6) for this turn", padding=PADDING)
+        dice_box.pack(fill="x", pady=(0, 8))
+        names = sorted(get_all_dice_names())
+        self.playbook_player_combo_vars: List[tk.StringVar] = []
+        for i in range(6):
+            ttk.Label(dice_box, text=f"Die {i+1}:").grid(row=i, column=0, sticky="e", padx=(0, 10))
+            var = tk.StringVar(value=names[0] if names else "")
+            box = ttk.Combobox(dice_box, values=names, width=30, textvariable=var, state="readonly")
+            box.grid(row=i, column=1, sticky="w")
+            self.playbook_player_combo_vars.append(var)
+
+        # Current turn status
+        status = ttk.LabelFrame(frame, text="Current Turn Status", padding=PADDING)
+        status.pack(fill="x", pady=(0, 8))
+        self.playbook_total_var = tk.StringVar(value="0")
+        self.playbook_roll_var = tk.StringVar(value="1")
+        self.playbook_dice_left_var = tk.StringVar(value="6")
+        ttk.Label(status, text="Total so far:").grid(row=0, column=0, sticky="e")
+        ttk.Label(status, textvariable=self.playbook_total_var).grid(row=0, column=1, sticky="w", padx=(6, 20))
+        ttk.Label(status, text="Roll #:").grid(row=0, column=2, sticky="e")
+        ttk.Label(status, textvariable=self.playbook_roll_var).grid(row=0, column=3, sticky="w", padx=(6, 20))
+        ttk.Label(status, text="Dice to roll:").grid(row=0, column=4, sticky="e")
+        ttk.Label(status, textvariable=self.playbook_dice_left_var).grid(row=0, column=5, sticky="w", padx=(6, 0))
+
+        # Enter roll values
+        roll_frame = ttk.LabelFrame(frame, text="Enter your current roll values (1-6)", padding=PADDING)
+        roll_frame.pack(fill="x", pady=(0, 8))
+        self.playbook_roll_frame = ttk.Frame(roll_frame)
+        self.playbook_roll_frame.pack(fill="x")
+        self.playbook_roll_vars: List[tk.StringVar] = []
+
+        # Actions
+        actions = ttk.Frame(frame)
+        actions.pack(fill="x", pady=(0, 8))
+        ttk.Button(actions, text="Suggest Best Keep", command=self.playbook_suggest_best).pack(side="left")
+        ttk.Button(actions, text="Apply Top Suggestion", command=self.playbook_apply_top).pack(side="left", padx=(8, 0))
+        ttk.Button(actions, text="Bank Now", command=self.playbook_bank_now).pack(side="left", padx=(8, 0))
+
+        # Suggestions / log
+        log_frame = ttk.LabelFrame(frame, text="Suggestions & Log", padding=PADDING)
+        log_frame.pack(fill="both", expand=True)
+        self.playbook_text = tk.Text(log_frame, height=16, wrap="word")
+        self.playbook_text.pack(fill="both", expand=True)
+
+        # Initialize state
+        self.playbook_all_dice: List[Die] = []
+        self.playbook_current_dice: List[Die] = []
+        self.playbook_total_dice: int = 6
+        self.playbook_current_total: int = 0
+        self.playbook_roll_index: int = 1
+        self.playbook_last_suggestion: Optional[tuple] = None
+        self._playbook_refresh_dice_from_selectors()
+        self._playbook_render_roll_inputs()
+
+    def _playbook_refresh_dice_from_selectors(self):
+        names = [v.get() for v in self.playbook_player_combo_vars]
+        dice = []
+        for n in names:
+            d = get_die_by_name(n)
+            if d:
+                dice.append(d)
+        self.playbook_all_dice = dice
+        if not self.playbook_current_dice:
+            self.playbook_current_dice = list(dice)
+        self.playbook_total_dice = max(1, len(dice)) if dice else 6
+        self.playbook_dice_left_var.set(str(len(self.playbook_current_dice) if self.playbook_current_dice else self.playbook_total_dice))
+
+    def _playbook_render_roll_inputs(self):
+        # Clear existing inputs
+        for child in list(self.playbook_roll_frame.winfo_children()):
+            child.destroy()
+        self.playbook_roll_vars.clear()
+        n = len(self.playbook_current_dice) if self.playbook_current_dice else self.playbook_total_dice
+        n = max(1, min(6, n))
+        for i in range(n):
+            ttk.Label(self.playbook_roll_frame, text=f"Die {i+1}:").grid(row=0, column=i*2, sticky="e")
+            var = tk.StringVar(value="")
+            spin = ttk.Spinbox(self.playbook_roll_frame, from_=1, to=6, width=4, textvariable=var)
+            spin.grid(row=0, column=i*2+1, sticky="w", padx=(4, 10))
+            self.playbook_roll_vars.append(var)
+
+    def _playbook_player_settings(self) -> Dict[str, int | bool]:
+        # Mirror Single Combo settings
+        def _to_int(v, default=0):
+            try:
+                return int(v)
+            except Exception:
+                return default
+        return {
+            "bank_min_value": _to_int(self.single_min_bank_var.get(), 0) or None,
+            "bank_min_applies_first_n_rolls": _to_int(self.single_min_bank_rolls_var.get(), 0) or None,
+            "no_bank_on_clear": bool(self.single_no_bank_on_clear_var.get()),
+            "reset_count_on_refresh": bool(self.single_reset_on_refresh_var.get()),
+            "bank_if_dice_below": max(0, min(5, _to_int(self.single_bank_if_dice_below_var.get(), 0))),
+            "win_target": _to_int(self.single_win_target_var.get(), 8000),
+        }
+
+    def playbook_reset_turn(self):
+        self._playbook_refresh_dice_from_selectors()
+        self.playbook_current_dice = list(self.playbook_all_dice)
+        self.playbook_current_total = 0
+        self.playbook_roll_index = 1
+        self.playbook_total_var.set("0")
+        self.playbook_roll_var.set("1")
+        self.playbook_dice_left_var.set(str(len(self.playbook_current_dice)))
+        self.playbook_text.delete(1.0, tk.END)
+        self.playbook_text.insert(tk.END, "Play Book reset. Enter your first roll and click 'Suggest Best Keep'.\n")
+        self._playbook_render_roll_inputs()
+
+    def playbook_suggest_best(self):
+        # Parse roll values
+        try:
+            roll = [int(v.get()) for v in self.playbook_roll_vars]
+        except Exception:
+            messagebox.showerror("Input Error", "Please enter valid roll values (1-6) for all dice.")
+            return
+        if any(v < 1 or v > 6 for v in roll):
+            messagebox.showerror("Input Error", "Roll values must be between 1 and 6.")
+            return
+        if not self.playbook_all_dice:
+            self._playbook_refresh_dice_from_selectors()
+        # Configure simulator
+        settings = self._playbook_player_settings()
+        sim = DiceSimulator(self.playbook_all_dice, num_simulations=0)
+        sim.bank_min_value = settings.get("bank_min_value")
+        sim.bank_min_applies_first_n_rolls = settings.get("bank_min_applies_first_n_rolls")
+        sim.no_bank_on_clear = bool(settings.get("no_bank_on_clear", False))
+        sim.reset_count_on_refresh = bool(settings.get("reset_count_on_refresh", False))
+        sim.bank_if_dice_below = int(settings.get("bank_if_dice_below", 0))
+        sim.win_target = int(settings.get("win_target", 8000))
+        # Compute candidate options (heuristic-ranked), then refine EV with state-based Monte Carlo
+        options = sim._find_optimal_choices(
+            roll,
+            self.playbook_total_dice,
+            self.playbook_current_total,
+            roll_index=self.playbook_roll_index + 1,
+        )
+        self.playbook_text.insert(tk.END, f"\nRoll #{self.playbook_roll_index}: {', '.join(map(str, roll))}\n")
+        if not options:
+            self.playbook_text.insert(tk.END, "No scoring options: BUST!\n")
+            self.playbook_last_suggestion = None
+            return
+
+        # Evaluate top-k options with precise state-based EV
+        k = min(10, len(options))
+        evaluated = []  # list of dicts with detailed info
+        n_curr = len(self.playbook_current_dice) if self.playbook_current_dice else self.playbook_total_dice
+        for opt in options[:k]:
+            kept_idx, score, ev_heur, desc = opt
+            bank_choice = (desc == "Bank after keep") or desc.startswith("Bank after keep (forced")
+            # Default precise EV: bank -> just keep_score; continue -> keep_score + future EV
+            precise_ev = float(score)
+            bust_rate = 0.0
+            future_added = 0.0
+
+            if not bank_choice:
+                # Build remaining dice after keeping kept_idx (indices align with current_dice ordering)
+                remaining_indices = [i for i in range(n_curr) if i not in kept_idx]
+                remaining_indices = [i for i in remaining_indices if i < len(self.playbook_current_dice)]
+                remaining_dice = [self.playbook_current_dice[i] for i in remaining_indices]
+                try:
+                    res = sim.simulate_from_state(
+                        remaining_dice,
+                        start_total=self.playbook_current_total + int(score),
+                        start_roll_index=self.playbook_roll_index + 1,
+                        full_set_size=self.playbook_total_dice,
+                        num_simulations=300,
+                    )
+                    future_added = float(res.get("avg_added", 0.0))
+                    bust_rate = float(res.get("bust_rate", 0.0))
+                    precise_ev = float(score) + future_added
+                except Exception:
+                    # Fallback: use heuristic EV if simulate_from_state fails for any reason
+                    precise_ev = float(score) + max(0.0, float(ev_heur) - float(score))
+
+            kept_vals = [roll[j] for j in kept_idx]
+            evaluated.append({
+                "kept_idx": kept_idx,
+                "score": int(score),
+                "desc": desc,
+                "kept_vals": kept_vals,
+                "ev_precise": precise_ev,
+                "bust_rate": bust_rate,
+                "future_added": future_added,
+                "opt": opt,
+            })
+
+        # Sort by precise EV desc
+        evaluated.sort(key=lambda x: x["ev_precise"], reverse=True)
+        best = evaluated[0]
+        self.playbook_last_suggestion = (best["opt"], roll)
+
+        # Render suggestions
+        self.playbook_text.insert(tk.END, "Top suggestions (precise EV):\n")
+        for i, info in enumerate(evaluated[:5], start=1):
+            kept_vals = info["kept_vals"]
+            score = info["score"]
+            desc = info["desc"]
+            evp = info["ev_precise"]
+            add_future = info["future_added"]
+            bust = info["bust_rate"] * 100.0
+            if desc == "Bank after keep" or desc.startswith("Bank after keep (forced"):
+                self.playbook_text.insert(tk.END, f"  {i}. Keep {kept_vals} for {score} pts -> BANK, EV(total add) {evp:.1f}\n")
+            else:
+                self.playbook_text.insert(tk.END, f"  {i}. Keep {kept_vals} for {score} pts -> CONT, future +{add_future:.1f}, EV(total add) {evp:.1f}, bust {bust:.1f}%\n")
+        self.playbook_text.see(tk.END)
+
+    def playbook_apply_top(self):
+        if not self.playbook_last_suggestion:
+            messagebox.showwarning("No Suggestion", "Click 'Suggest Best Keep' first.")
+            return
+        (best_opt, roll) = self.playbook_last_suggestion
+        kept_idx, score, _ev, desc = best_opt
+        kept_vals = [roll[j] for j in kept_idx]
+        self.playbook_current_total += int(score)
+        self.playbook_text.insert(tk.END, f"Applied: kept {kept_vals} (+{score}). Total = {self.playbook_current_total}. {desc}\n")
+        # Determine banking
+        bank = (desc == "Bank after keep") or desc.startswith("Bank after keep (forced")
+        # Update current dice by removing kept indices from current roll mapping
+        n = len(self.playbook_current_dice) if self.playbook_current_dice else self.playbook_total_dice
+        remaining_indices = [i for i in range(n) if i not in kept_idx]
+        # If n might mismatch, clamp
+        remaining_indices = [i for i in remaining_indices if i < len(self.playbook_current_dice)]
+        self.playbook_current_dice = [self.playbook_current_dice[i] for i in remaining_indices]
+        # Handle bank
+        if bank:
+            self.playbook_text.insert(tk.END, f"Decision: BANK NOW at {self.playbook_current_total} points. Turn ends.\n")
+            self.playbook_total_var.set(str(self.playbook_current_total))
+            # Typically start a new turn after bank; keep state but reset for next turn
+            self.playbook_current_total = 0
+            self.playbook_roll_index = 1
+            self.playbook_current_dice = list(self.playbook_all_dice)
+            self.playbook_dice_left_var.set(str(len(self.playbook_current_dice)))
+            self._playbook_render_roll_inputs()
+            self.playbook_text.insert(tk.END, "-- New turn started. Enter next roll. --\n")
+            self.playbook_text.see(tk.END)
+            return
+        # If all dice used, refresh and maybe reset roll counter
+        if not self.playbook_current_dice:
+            self.playbook_text.insert(tk.END, f"Used all dice -> refresh full set. Current total: {self.playbook_current_total}.\n")
+            self.playbook_current_dice = list(self.playbook_all_dice)
+            if bool(self.single_reset_on_refresh_var.get()):
+                self.playbook_roll_index = 0  # will increment to 1 below
+        # Advance to next roll
+        self.playbook_roll_index += 1
+        self.playbook_total_var.set(str(self.playbook_current_total))
+        self.playbook_roll_var.set(str(self.playbook_roll_index))
+        self.playbook_dice_left_var.set(str(len(self.playbook_current_dice)))
+        self._playbook_render_roll_inputs()
+        self.playbook_text.insert(tk.END, "Enter next roll values and suggest again.\n")
+        self.playbook_text.see(tk.END)
+
+    def playbook_bank_now(self):
+        self.playbook_text.insert(tk.END, f"Manual decision: BANK NOW at {self.playbook_current_total} points. Turn ends.\n")
+        self.playbook_total_var.set(str(self.playbook_current_total))
+        # Reset for next turn
+        self.playbook_current_total = 0
+        self.playbook_roll_index = 1
+        self.playbook_current_dice = list(self.playbook_all_dice)
+        self.playbook_dice_left_var.set(str(len(self.playbook_current_dice)))
+        self._playbook_render_roll_inputs()
+        self.playbook_text.insert(tk.END, "-- New turn started. Enter next roll. --\n")
+        self.playbook_text.see(tk.END)
+
+    def send_to_playbook_from_game(self):
+        names = [v.get() for v in getattr(self, 'player_combo_vars', [])]
+        if any(not n for n in names):
+            messagebox.showerror("Input Error", "Please select all 6 Player dice in Game Simulator first.")
+            return
+        self._playbook_set_dice_names(names)
+        try:
+            self.tab_control.select(self.playbook_tab)
+        except Exception:
+            pass
+
+    def load_playbook_from_game(self):
+        self.send_to_playbook_from_game()
+
+    def _playbook_set_dice_names(self, names: List[str]):
+        all_names = set(get_all_dice_names())
+        for i, name in enumerate(names):
+            if name in all_names and i < len(self.playbook_player_combo_vars):
+                self.playbook_player_combo_vars[i].set(name)
+        # Refresh state
+        self.playbook_reset_turn()
 
     def randomize_ai_dice(self):
         """Randomly assign AI dice from the full dice list (duplicates allowed)."""

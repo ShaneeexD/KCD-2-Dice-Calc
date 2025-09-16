@@ -451,6 +451,132 @@ class DiceSimulator:
         # If we get here, we've completed all rolls successfully
         return total_score, False, roll_count, choice_descriptions
     
+    def _simulate_turn_with_optimal_choices_from_state(
+        self,
+        current_dice: List[Die],
+        start_total: int,
+        start_roll_index: int,
+        full_set_size: int,
+        debug: bool = False,
+    ) -> Tuple[int, bool, int, List[str]]:
+        """
+        Simulate a single turn from an arbitrary state.
+        - current_dice: the dice remaining to roll now (0..full_set_size)
+        - start_total: points already accumulated this turn before this roll
+        - start_roll_index: the next roll index (1-based)
+        - full_set_size: total dice in the full set for this turn (typically 6)
+        """
+        total_score = int(start_total)
+        roll_count = max(0, int(start_roll_index) - 1)
+        choice_descriptions: List[str] = []
+        total_dice = int(full_set_size)
+        # If no dice remain at state start, refresh to full set
+        if not current_dice:
+            choice_descriptions.append(f"Used all dice previously -> refreshing full set. Current score: {total_score}")
+            # The caller should supply the intended dice (weights matter),
+            # so we keep the composition by reconstructing via self.dice or accept given list length.
+            # Here, we assume the full set equals 'dice' that were used to create the simulator in caller
+            # and mirror the pattern of _simulate_turn_with_optimal_choices.
+            # For safety, we reuse self.dice if it matches full_set_size.
+            base_set = self.dice if len(self.dice) == total_dice else current_dice
+            current_dice = list(base_set)[:total_dice]
+            if self.reset_count_on_refresh and self.bank_min_applies_first_n_rolls is not None:
+                roll_count = 0
+                choice_descriptions.append("Reset roll count for minimum bank rule")
+        
+        max_turns = 50
+        while (current_dice is not None) and (roll_count < max_turns):
+            if len(current_dice) == 0:
+                # Refresh dice stack if empty
+                choice_descriptions.append(f"Used all dice -> refreshing with full set. Current score: {total_score}")
+                base_set = self.dice if len(self.dice) == total_dice else current_dice
+                current_dice = list(base_set)[:total_dice]
+                if self.reset_count_on_refresh and self.bank_min_applies_first_n_rolls is not None:
+                    roll_count = 0
+                    choice_descriptions.append("Reset roll count for minimum bank rule")
+            
+            roll_count += 1
+            # Roll the current dice
+            current_roll = self._roll_dice(current_dice)
+            roll_str = ", ".join(str(v) for v in current_roll)
+            if debug:
+                dice_names = [die.name for die in current_dice]
+                logger.info(f"DEBUG(state): Roll {roll_count} with {len(current_dice)} dice: {roll_str}")
+                logger.info(f"DEBUG(state): Dice used: {Counter(dice_names)}")
+
+            options = self._find_optimal_choices(current_roll, total_dice, total_score, roll_index=roll_count + 1)
+            if not options:
+                choice_descriptions.append(f"Roll {roll_count}: {roll_str} - BUST!")
+                return total_score - start_total, True, roll_count, choice_descriptions
+
+            best_option = options[0]
+            kept_indices, keep_score, _ev, description = best_option
+            kept_values = [current_roll[i] for i in kept_indices]
+            kept_str = ", ".join(map(str, kept_values))
+            choice_descriptions.append(
+                f"Roll {roll_count}: {roll_str} - Kept {kept_str} for {keep_score} points ({description})"
+            )
+            total_score += int(keep_score)
+
+            if description == "Bank after keep" or description.startswith("Bank after keep (forced"):
+                if description.startswith("Bank after keep (forced"):
+                    choice_descriptions[-1] = (
+                        f"Roll {roll_count}: {roll_str} - Kept {kept_str} for {keep_score} points and BANK NOW at {total_score} points (forced - low dice count)"
+                    )
+                else:
+                    choice_descriptions.append(f"Decision: BANK NOW after keep at {total_score} points")
+                return total_score - start_total, False, roll_count, choice_descriptions
+            if total_score >= self.win_target:
+                total_score = int(self.win_target)
+                choice_descriptions.append(f"Reached {self.win_target} points, ending turn.")
+                break
+
+            # Remove kept dice from pool
+            remaining_indices = [i for i in range(len(current_roll)) if i not in kept_indices]
+            current_dice = [current_dice[i] for i in remaining_indices]
+
+        if roll_count >= max_turns:
+            logger.warning(f"Hit maximum turn limit ({max_turns}) - ending simulation")
+            choice_descriptions.append(f"Hit maximum turn limit ({max_turns}) - ending simulation")
+        return total_score - start_total, False, roll_count, choice_descriptions
+
+    def simulate_from_state(
+        self,
+        current_dice: List[Die],
+        start_total: int,
+        start_roll_index: int,
+        full_set_size: int,
+        num_simulations: int = 300,
+    ) -> Dict:
+        """
+        Monte Carlo estimate of additional points from an arbitrary mid-turn state.
+        Respects simulator banking settings (min bank, no bank on clear, reset on refresh, bank-if-below, win target).
+        Returns dict with avg_added, bust_rate, avg_rolls and a sample log.
+        """
+        sims = max(50, int(num_simulations))
+        total_added = 0
+        busts = 0
+        rolls = []
+        sample_log: Optional[str] = None
+        for i in range(sims):
+            add, did_bust, nrolls, log = self._simulate_turn_with_optimal_choices_from_state(
+                list(current_dice), int(start_total), int(start_roll_index), int(full_set_size), debug=False
+            )
+            total_added += int(add)
+            if did_bust:
+                busts += 1
+            rolls.append(nrolls)
+            # capture the first run's log as a sample
+            if sample_log is None:
+                sample_log = "\n".join(log)
+        n = sims
+        return {
+            "avg_added": total_added / n,
+            "bust_rate": busts / n,
+            "avg_rolls": sum(rolls) / max(1, len(rolls)),
+            "sample_log": sample_log or "",
+        }
+    
     def _test_scoring(self):
         """Test function to verify scoring works properly."""
         # Create some test rolls that should definitely score
