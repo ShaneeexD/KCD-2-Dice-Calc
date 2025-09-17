@@ -108,7 +108,7 @@ class DiceCalculatorApp:
         self.tab_control.add(self.strategy_tab, text="Strategy Calculator (WIP)")
         self.tab_control.add(self.single_combo_tab, text="Single Combo Simulator")
         self.tab_control.add(self.game_sim_tab, text="Game Simulator (WIP)")
-        self.tab_control.add(self.playbook_tab, text="Play Book (WIP)")
+        self.tab_control.add(self.playbook_tab, text="Play Book")
         
         self.tab_control.pack(expand=1, fill="both")
         
