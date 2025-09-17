@@ -635,6 +635,10 @@ class DiceCalculatorApp:
         ttk.Label(status, textvariable=self.playbook_dice_left_var).grid(row=0, column=5, sticky="w", padx=(6, 20))
         ttk.Label(status, text="Overall score:").grid(row=0, column=6, sticky="e")
         ttk.Label(status, textvariable=self.playbook_overall_score_var).grid(row=0, column=7, sticky="w", padx=(6, 0))
+        # Row 1: AI score input for win% optimizer
+        ttk.Label(status, text="AI score:").grid(row=1, column=0, sticky="e", pady=(6, 0))
+        self.playbook_ai_score_var = tk.StringVar(value="0")
+        ttk.Spinbox(status, from_=0, to=20000, increment=100, width=8, textvariable=self.playbook_ai_score_var).grid(row=1, column=1, sticky="w", padx=(6, 0), pady=(6, 0))
 
         # Enter roll values
         roll_frame = ttk.LabelFrame(frame, text="Enter your current roll values (1-6)", padding=PADDING)
@@ -657,6 +661,17 @@ class DiceCalculatorApp:
                                                  textvariable=self.playbook_risk_penalty_var)
         self.playbook_risk_penalty.pack(side="left", padx=(4, 16))
         add_tooltip(self.playbook_risk_penalty, "Subtract this many points from EV for 100% bust risk (scaled by bust%). Higher = more risk-averse.")
+
+        # Optimize by mode: Win% or EV
+        ttk.Label(actions, text="Optimize:").pack(side="left")
+        self.playbook_opt_mode_var = tk.StringVar(value="Win%")
+        self.playbook_opt_mode = ttk.Combobox(actions, values=["Win%", "EV"], width=6, state="readonly",
+                                              textvariable=self.playbook_opt_mode_var)
+        self.playbook_opt_mode.pack(side="left", padx=(4, 16))
+
+        # Fast vs Slow (accurate) toggle: Fast skips Monte Carlo and precise EV
+        self.playbook_fast_mode_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(actions, text="Fast (heuristic)", variable=self.playbook_fast_mode_var).pack(side="left", padx=(0, 16))
 
         # Buttons to apply any of the top 5 suggestions directly
         self.playbook_apply_btns = []
@@ -792,8 +807,8 @@ class DiceCalculatorApp:
             self.playbook_last_suggestion = None
             return
 
-        # Evaluate top-k options with precise state-based EV
-        k = min(10, len(options))
+        # Evaluate a curated set of options with precise EV / Win%.
+        # Take top-by-heuristic plus top-by-immediate-score to ensure strong-scoring sets are included.
         evaluated = []  # list of dicts with detailed info
         n_curr = len(self.playbook_current_dice) if self.playbook_current_dice else self.playbook_total_dice
         # Build compact dice labels for this roll (D1..Dn) and a short name map
@@ -804,6 +819,24 @@ class DiceCalculatorApp:
         for i in range(min(n_curr, len(self.playbook_current_dice))):
             nm = getattr(self.playbook_current_dice[i], 'name', f'Die{i+1}')
             name_map.append(f"{labels[i]}={_abbr(nm)}")
+        # Curate candidates: top 10 by heuristic ordering + top 10 by immediate score
+        cand: list = []
+        seen_keys = set()
+        # Helper to add unique options based on kept indices and desc
+        def _add_candidate(opt):
+            kept_idx, sc, evh, desc = opt
+            key = (tuple(sorted(list(kept_idx))), desc)
+            if key not in seen_keys:
+                seen_keys.add(key)
+                cand.append(opt)
+        for opt in options[:10]:
+            _add_candidate(opt)
+        opts_by_score = sorted(list(options), key=lambda x: x[1], reverse=True)[:10]
+        for opt in opts_by_score:
+            _add_candidate(opt)
+        # Cap total candidates to avoid heavy compute
+        if len(cand) > 25:
+            cand = cand[:25]
         # Parse current overall and game limit for win-target banking
         try:
             overall_score = int(self.playbook_overall_score_var.get() or 0)
@@ -814,7 +847,47 @@ class DiceCalculatorApp:
         except Exception:
             game_limit = 8000
 
-        for opt in options[:k]:
+        # Fast mode skips GameSimulator usage
+        fast_mode = bool(getattr(self, 'playbook_fast_mode_var', tk.BooleanVar(value=False)).get())
+        if not fast_mode:
+            # Prepare GameSimulator for win% estimates
+            try:
+                ai_names = [v.get() for v in getattr(self, 'ai_combo_vars', [])]
+            except Exception:
+                ai_names = []
+            ai_dice = []
+            if ai_names and all(ai_names):
+                for name in ai_names:
+                    d = get_die_by_name(name)
+                    if d:
+                        ai_dice.append(d)
+            if not ai_dice:
+                # Fallback to Ordinary dice if AI combo not set
+                ord_die = get_die_by_name("Ordinary die")
+                ai_dice = [ord_die] * 6 if ord_die else list(self.playbook_all_dice)
+            try:
+                game_limit = int(self.playbook_game_limit_var.get() or 8000)
+            except Exception:
+                game_limit = 8000
+            # Build a game simulator with current settings
+            gs = GameSimulator(
+                player_dice=list(self.playbook_all_dice),
+                ai_dice=ai_dice,
+                win_target=game_limit,
+                ai_profile=self.ai_profile_var.get() if hasattr(self, 'ai_profile_var') else 'priest',
+                player_settings={
+                    key: settings.get(key)
+                    for key in [
+                        "bank_min_value",
+                        "bank_min_applies_first_n_rolls",
+                        "no_bank_on_clear",
+                        "reset_count_on_refresh",
+                        "bank_if_dice_below",
+                    ]
+                },
+            )
+
+        for opt in cand:
             kept_idx, score, ev_heur, desc = opt
             bank_choice = (desc == "Bank after keep") or desc.startswith("Bank after keep (forced")
             # Default precise EV: bank -> just keep_score; continue -> keep_score + future EV
@@ -833,22 +906,60 @@ class DiceCalculatorApp:
                 remaining_indices = [i for i in range(n_curr) if i not in kept_idx]
                 remaining_indices = [i for i in remaining_indices if i < len(self.playbook_current_dice)]
                 remaining_dice = [self.playbook_current_dice[i] for i in remaining_indices]
-                try:
-                    res = sim.simulate_from_state(
-                        remaining_dice,
-                        start_total=self.playbook_current_total + int(score),
-                        start_roll_index=self.playbook_roll_index + 1,
-                        full_set_size=self.playbook_total_dice,
-                        num_simulations=300,
-                    )
-                    future_added = float(res.get("avg_added", 0.0))
-                    bust_rate = float(res.get("bust_rate", 0.0))
-                    precise_ev = float(score) + future_added
-                except Exception:
-                    # Fallback: use heuristic EV if simulate_from_state fails for any reason
-                    precise_ev = float(score) + max(0.0, float(ev_heur) - float(score))
+                if not fast_mode:
+                    try:
+                        res = sim.simulate_from_state(
+                            remaining_dice,
+                            start_total=self.playbook_current_total + int(score),
+                            start_roll_index=self.playbook_roll_index + 1,
+                            full_set_size=self.playbook_total_dice,
+                            num_simulations=300,
+                        )
+                        future_added = float(res.get("avg_added", 0.0))
+                        bust_rate = float(res.get("bust_rate", 0.0))
+                        precise_ev = float(score) + future_added
+                    except Exception:
+                        # Fallback: use heuristic EV if simulate_from_state fails for any reason
+                        precise_ev = float(score) + max(0.0, float(ev_heur) - float(score))
+                else:
+                    # Fast heuristic path: use heuristic EV as-is
+                    precise_ev = float(ev_heur)
 
             kept_vals = [roll[j] for j in kept_idx]
+            # Win probability estimation (skip in fast mode)
+            if not fast_mode:
+                try:
+                    ai_total = int(self.playbook_ai_score_var.get() or 0)
+                except Exception:
+                    ai_total = 0
+                if bank_choice:
+                    # If banking reaches limit, certain win
+                    if projected_total_if_bank >= game_limit:
+                        win_prob = 1.0
+                    else:
+                        win_prob = gs.estimate_win_probability(
+                            player_total=overall_score + self.playbook_current_total + int(score),
+                            ai_total=ai_total,
+                            next_actor="ai",
+                            start_remaining_dice=None,
+                            start_turn_total=0,
+                            start_roll_index=1,
+                            trials=200,
+                        )
+                else:
+                    # Continue from current state
+                    win_prob = gs.estimate_win_probability(
+                        player_total=overall_score,
+                        ai_total=ai_total,
+                        next_actor="player",
+                        start_remaining_dice=remaining_dice,
+                        start_turn_total=self.playbook_current_total + int(score),
+                        start_roll_index=self.playbook_roll_index + 1,
+                        trials=200,
+                    )
+            else:
+                win_prob = 0.0
+
             evaluated.append({
                 "kept_idx": kept_idx,
                 "score": int(score),
@@ -857,6 +968,7 @@ class DiceCalculatorApp:
                 "ev_precise": precise_ev,
                 "bust_rate": bust_rate,
                 "future_added": future_added,
+                "win_prob": float(win_prob),
                 # store updated desc in opt clone for apply path
                 "opt": (kept_idx, score, ev_heur, desc),
             })
@@ -867,12 +979,22 @@ class DiceCalculatorApp:
         except Exception:
             risk_penalty = 0.0
         for info in evaluated:
-            info["rank_score"] = float(info["ev_precise"]) - risk_penalty * float(info["bust_rate"])  # bust_rate is 0..1
+            # EV-based rank
+            ev_rank = float(info["ev_precise"]) - risk_penalty * float(info["bust_rate"])  # bust_rate is 0..1
+            info["ev_rank"] = ev_rank
+            # Win% based rank
+            info["wp_rank"] = float(info.get("win_prob", 0.0))
             # Win-target banking should always be preferred over continuing
             desc_txt = str(info.get("desc", ""))
             info["win_flag"] = 1 if "win target" in desc_txt else 0
-        # Sort primarily by win_flag, then by risk-adjusted rank score
-        evaluated.sort(key=lambda x: (x["win_flag"], x["rank_score"]), reverse=True)
+        # Sort by selected mode
+        mode = (self.playbook_opt_mode_var.get() or "Win%").strip()
+        if fast_mode:
+            mode = "EV"
+        if mode == "Win%":
+            evaluated.sort(key=lambda x: (x["win_flag"], x["wp_rank"]), reverse=True)
+        else:
+            evaluated.sort(key=lambda x: (x["win_flag"], x["ev_rank"]), reverse=True)
         best = evaluated[0]
         self.playbook_last_suggestion = (best["opt"], roll)
         self.playbook_last_options = evaluated
@@ -892,15 +1014,22 @@ class DiceCalculatorApp:
             evp = info["ev_precise"]
             add_future = info["future_added"]
             bust = info["bust_rate"] * 100.0
-            rank_score = info.get("rank_score", evp)
+            winp = info.get("win_prob", 0.0) * 100.0
+            rank_score = info.get("ev_rank", evp)
             if (
                 desc == "Bank after keep"
                 or desc.startswith("Bank after keep (forced")
                 or desc.startswith("Bank after keep (win target")
             ):
-                self.playbook_text.insert(tk.END, f"  {i}. Keep {kept_display} for {score} pts -> BANK, EV {evp:.1f}, score {rank_score:.1f}\n")
+                if mode == "Win%":
+                    self.playbook_text.insert(tk.END, f"  {i}. Keep {kept_display} for {score} pts -> BANK, win {winp:.1f}%\n")
+                else:
+                    self.playbook_text.insert(tk.END, f"  {i}. Keep {kept_display} for {score} pts -> BANK, EV {evp:.1f}, win {winp:.1f}%, score {rank_score:.1f}\n")
             else:
-                self.playbook_text.insert(tk.END, f"  {i}. Keep {kept_display} for {score} pts -> CONT, future +{add_future:.1f}, EV {evp:.1f}, bust {bust:.1f}%, score {rank_score:.1f}\n")
+                if mode == "Win%":
+                    self.playbook_text.insert(tk.END, f"  {i}. Keep {kept_display} for {score} pts -> CONT, win {winp:.1f}%, bust {bust:.1f}%\n")
+                else:
+                    self.playbook_text.insert(tk.END, f"  {i}. Keep {kept_display} for {score} pts -> CONT, future +{add_future:.1f}, EV {evp:.1f}, win {winp:.1f}%, bust {bust:.1f}%, score {rank_score:.1f}\n")
         self.playbook_text.see(tk.END)
 
     def playbook_apply_top(self):

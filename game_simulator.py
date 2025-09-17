@@ -237,3 +237,65 @@ class GameSimulator:
             "example_player_win": _format_example(example_win),
             "example_player_loss": _format_example(example_loss),
         }
+
+    def estimate_win_probability(
+        self,
+        player_total: int,
+        ai_total: int,
+        next_actor: str,
+        start_remaining_dice: Optional[List[Die]],
+        start_turn_total: int,
+        start_roll_index: int,
+        trials: int = 300,
+    ) -> float:
+        """
+        Monte Carlo estimate of the player's chance to win the game from an arbitrary mid-game state.
+        - If next_actor == 'player' and start_remaining_dice is provided, we simulate the rest of the player's turn
+          from that state using DiceSimulator._simulate_turn_with_optimal_choices_from_state().
+        - If next_actor == 'ai', we simulate AI's turn using the configured AI profile.
+        After finishing the current actor's turn, we alternate turns (player <-> ai) with normal policies until
+        one side reaches the win_target. Returns fraction of trials the player wins.
+        """
+        trials = max(50, int(trials))
+        wins = 0
+        ai_profile = AI_PROFILES.get(self.ai_profile_name, AI_PROFILES["priest"])
+        for _ in range(trials):
+            pt = int(player_total)
+            at = int(ai_total)
+            current = next_actor
+
+            # Configure a simulator for player's decisions
+            player_sim = DiceSimulator(self.player_dice, num_simulations=0)
+            if self.player_settings:
+                self._configure_sim(player_sim, self.player_settings)
+            else:
+                player_sim.win_target = int(self.win_target)
+
+            # Loop until win
+            safeguard = 0
+            while pt < self.win_target and at < self.win_target and safeguard < 200:
+                safeguard += 1
+                if current == "player":
+                    if start_remaining_dice is not None:
+                        # Continue player's current turn from state
+                        add, did_bust, _rc, _log = player_sim._simulate_turn_with_optimal_choices_from_state(
+                            list(start_remaining_dice), int(start_turn_total), int(start_roll_index), len(self.player_dice), debug=False
+                        )
+                        gained = 0 if did_bust else int(add)
+                        pt += gained
+                        # After using the one-time state, clear it so subsequent player turns start fresh
+                        start_remaining_dice = None
+                        start_turn_total = 0
+                        start_roll_index = 1
+                    else:
+                        gained = self._play_single_turn(self.player_dice, profile=None, capture_log=False)
+                        pt += int(gained)
+                    current = "ai"
+                else:
+                    gained = self._play_single_turn(self.ai_dice, profile=ai_profile, capture_log=False)
+                    at += int(gained)
+                    current = "player"
+
+            if pt >= self.win_target:
+                wins += 1
+        return wins / trials
