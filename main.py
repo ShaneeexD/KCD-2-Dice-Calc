@@ -868,7 +868,11 @@ class DiceCalculatorApp:
             risk_penalty = 0.0
         for info in evaluated:
             info["rank_score"] = float(info["ev_precise"]) - risk_penalty * float(info["bust_rate"])  # bust_rate is 0..1
-        evaluated.sort(key=lambda x: (x["rank_score"]), reverse=True)
+            # Win-target banking should always be preferred over continuing
+            desc_txt = str(info.get("desc", ""))
+            info["win_flag"] = 1 if "win target" in desc_txt else 0
+        # Sort primarily by win_flag, then by risk-adjusted rank score
+        evaluated.sort(key=lambda x: (x["win_flag"], x["rank_score"]), reverse=True)
         best = evaluated[0]
         self.playbook_last_suggestion = (best["opt"], roll)
         self.playbook_last_options = evaluated
@@ -889,7 +893,11 @@ class DiceCalculatorApp:
             add_future = info["future_added"]
             bust = info["bust_rate"] * 100.0
             rank_score = info.get("rank_score", evp)
-            if desc == "Bank after keep" or desc.startswith("Bank after keep (forced"):
+            if (
+                desc == "Bank after keep"
+                or desc.startswith("Bank after keep (forced")
+                or desc.startswith("Bank after keep (win target")
+            ):
                 self.playbook_text.insert(tk.END, f"  {i}. Keep {kept_display} for {score} pts -> BANK, EV {evp:.1f}, score {rank_score:.1f}\n")
             else:
                 self.playbook_text.insert(tk.END, f"  {i}. Keep {kept_display} for {score} pts -> CONT, future +{add_future:.1f}, EV {evp:.1f}, bust {bust:.1f}%, score {rank_score:.1f}\n")
