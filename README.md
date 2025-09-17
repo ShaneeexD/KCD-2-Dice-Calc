@@ -9,6 +9,7 @@ A Python application that helps players optimize their dice selection and strate
 - **Target Calculator**: Calculate the optimal combination of dice to maximize your chances of rolling specific numbers
 - **Single Combo Simulator**: Test a specific dice combination with advanced banking rules and decision breakdowns
 - **Game Simulator (Player vs AI)**: Simulate full games to a point cap against an AI profile (no badges) and get win rates and more
+- **Play Book**: Real-time assistant for actual gameplay with turn-by-turn guidance optimized for win probability
 - **Strategy Calculator** (WIP): Find the best dice combination and strategy to maximize your expected score
 - **Progress Tracking**: Real-time progress updates during calculations
 
@@ -95,6 +96,35 @@ Results include:
 - Average margin (Player - AI)
 - Distribution of game lengths (by number of turns)
 - Elapsed time
+- Example game logs showing turn-by-turn decisions
+
+### Play Book Tab
+
+The Play Book is a real-time assistant for actual gameplay that provides turn-by-turn guidance:
+
+1. Select your 6 dice for the turn (or load from Game Simulator)
+2. Set your game parameters:
+   - Game point limit (default: 8000)
+   - Your current Overall score
+   - AI's current score (for win probability calculations)
+3. Enter your roll values for each die (labeled with die names and D# tags)
+4. Click "Suggest Best Keep" to get ranked options
+
+The Play Book offers:
+- Win probability optimization: Ranks options by chance to win the game from your exact state
+- EV optimization: Alternative ranking by risk-adjusted expected value
+- Fast mode: Quick heuristic suggestions when you need speed over precision
+- Risk penalty adjustment: Control risk aversion in EV mode
+- One-click application of suggestions
+- Banking recommendations when reaching the game limit
+- Turn and overall score tracking
+
+Controls:
+- Load Player Dice from Game Simulator: Copy dice from Game Simulator tab
+- Reset Turn: Clear current turn (keeps Overall score)
+- Full Reset: Reset Overall score and current turn
+- Bank Now: End turn and add points to Overall score
+- Apply #1-5: Apply specific suggestions from the ranked list
 
 ### Strategy Calculator Tab (Work in Progress)
 
@@ -117,6 +147,13 @@ Simulates thousands of turns with a specific dice combination, using optimal dec
 - Banking threshold rules for early rolls
 - Options to continue after clearing all dice
 - Detailed breakdowns of decisions made during turns
+
+### Play Book
+Uses Monte Carlo simulation to estimate win probability from any game state:
+- Simulates the rest of the current turn from your exact dice state
+- Continues with alternating turns (player/AI) until someone reaches the game limit
+- Ranks options by probability of winning the game, not just by expected points
+- Accounts for your banking rules, game point limit, and current scores
 
 ### Strategy Calculator (WIP)
 Will run simulations across different dice combinations to determine the optimal setup and playing strategy.
