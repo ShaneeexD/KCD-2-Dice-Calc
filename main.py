@@ -599,14 +599,21 @@ class DiceCalculatorApp:
         # Controls row
         ctrl = ttk.Frame(frame)
         ctrl.pack(fill="x", pady=(0, 8))
-        ttk.Button(ctrl, text="Load Player Dice from Game Simulator", command=self.load_playbook_from_game).pack(side="left")
-        ttk.Button(ctrl, text="Reset Turn", command=self.playbook_reset_turn).pack(side="left", padx=(8, 0))
-        ttk.Button(ctrl, text="Full Reset", command=self.playbook_full_reset).pack(side="left", padx=(8, 0))
+        load_from_game_btn = ttk.Button(ctrl, text="Load Player Dice from Game Simulator", command=self.load_playbook_from_game)
+        load_from_game_btn.pack(side="left")
+        add_tooltip(load_from_game_btn, "Copy your 6 Player dice selections from the Game Simulator into the Play Book.")
+        reset_turn_btn = ttk.Button(ctrl, text="Reset Turn", command=self.playbook_reset_turn)
+        reset_turn_btn.pack(side="left", padx=(8, 0))
+        add_tooltip(reset_turn_btn, "Clear the current turn (keeps Overall score). Starts Roll #1 with the same 6 dice.")
+        full_reset_btn = ttk.Button(ctrl, text="Full Reset", command=self.playbook_full_reset)
+        full_reset_btn.pack(side="left", padx=(8, 0))
+        add_tooltip(full_reset_btn, "Reset Overall score and the current turn. Use to start a brand new game session.")
         ttk.Label(ctrl, text="Game point limit:").pack(side="left", padx=(16, 4))
         self.playbook_game_limit_var = tk.StringVar(value="8000")
         self.playbook_game_limit_entry = ttk.Spinbox(ctrl, from_=500, to=20000, increment=250, width=8,
                                                      textvariable=self.playbook_game_limit_var)
         self.playbook_game_limit_entry.pack(side="left")
+        add_tooltip(self.playbook_game_limit_entry, "Game point cap to win. The Play Book will suggest BANK if a keep reaches this total.")
 
         # Player dice selection for Play Book
         dice_box = ttk.LabelFrame(frame, text="Player Dice (6) for this turn", padding=PADDING)
@@ -618,6 +625,7 @@ class DiceCalculatorApp:
             var = tk.StringVar(value=names[0] if names else "")
             box = ttk.Combobox(dice_box, values=names, width=30, textvariable=var, state="readonly")
             box.grid(row=i, column=1, sticky="w")
+            add_tooltip(box, "Select which die you are using in this position for this turn.")
             self.playbook_player_combo_vars.append(var)
 
         # Current turn status
@@ -638,7 +646,9 @@ class DiceCalculatorApp:
         # Row 1: AI score input for win% optimizer
         ttk.Label(status, text="AI score:").grid(row=1, column=0, sticky="e", pady=(6, 0))
         self.playbook_ai_score_var = tk.StringVar(value="0")
-        ttk.Spinbox(status, from_=0, to=20000, increment=100, width=8, textvariable=self.playbook_ai_score_var).grid(row=1, column=1, sticky="w", padx=(6, 0), pady=(6, 0))
+        ai_score_spin = ttk.Spinbox(status, from_=0, to=20000, increment=100, width=8, textvariable=self.playbook_ai_score_var)
+        ai_score_spin.grid(row=1, column=1, sticky="w", padx=(6, 0), pady=(6, 0))
+        add_tooltip(ai_score_spin, "Opponent's current score. Used by Win% optimizer to evaluate chances to win the game.")
 
         # Enter roll values
         roll_frame = ttk.LabelFrame(frame, text="Enter your current roll values (1-6)", padding=PADDING)
@@ -650,9 +660,15 @@ class DiceCalculatorApp:
         # Actions
         actions = ttk.Frame(frame)
         actions.pack(fill="x", pady=(0, 8))
-        ttk.Button(actions, text="Suggest Best Keep", command=self.playbook_suggest_best).pack(side="left")
-        ttk.Button(actions, text="Apply Top Suggestion", command=self.playbook_apply_top).pack(side="left", padx=(8, 0))
-        ttk.Button(actions, text="Bank Now", command=self.playbook_bank_now).pack(side="left", padx=(8, 16))
+        suggest_btn = ttk.Button(actions, text="Suggest Best Keep", command=self.playbook_suggest_best)
+        suggest_btn.pack(side="left")
+        add_tooltip(suggest_btn, "Analyze this roll and rank options by Win% or EV from your exact state.")
+        apply_top_btn = ttk.Button(actions, text="Apply Top Suggestion", command=self.playbook_apply_top)
+        apply_top_btn.pack(side="left", padx=(8, 0))
+        add_tooltip(apply_top_btn, "Apply the #1 suggestion to the current turn.")
+        bank_now_btn = ttk.Button(actions, text="Bank Now", command=self.playbook_bank_now)
+        bank_now_btn.pack(side="left", padx=(8, 16))
+        add_tooltip(bank_now_btn, "End the turn immediately and add the current total to Overall score.")
 
         # Risk aversion control: penalty (points) per 100% bust probability
         ttk.Label(actions, text="Risk penalty:").pack(side="left")
@@ -668,16 +684,20 @@ class DiceCalculatorApp:
         self.playbook_opt_mode = ttk.Combobox(actions, values=["Win%", "EV"], width=6, state="readonly",
                                               textvariable=self.playbook_opt_mode_var)
         self.playbook_opt_mode.pack(side="left", padx=(4, 16))
+        add_tooltip(self.playbook_opt_mode, "Win%: maximize chance to win the game. EV: maximize expected points (risk-adjusted).")
 
         # Fast vs Slow (accurate) toggle: Fast skips Monte Carlo and precise EV
         self.playbook_fast_mode_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(actions, text="Fast (heuristic)", variable=self.playbook_fast_mode_var).pack(side="left", padx=(0, 16))
+        fast_cb = ttk.Checkbutton(actions, text="Fast (heuristic)", variable=self.playbook_fast_mode_var)
+        fast_cb.pack(side="left", padx=(0, 16))
+        add_tooltip(fast_cb, "Skip precise simulations for speed. Uses heuristics (quicker but less accurate). Forces EV ranking.")
 
         # Buttons to apply any of the top 5 suggestions directly
         self.playbook_apply_btns = []
         for i in range(1, 6):
             btn = ttk.Button(actions, text=f"Apply #{i}", command=lambda idx=i: self.playbook_apply_index(idx-1))
             btn.pack(side="left", padx=(4, 0))
+            add_tooltip(btn, f"Apply suggestion #{i} from the list below.")
             self.playbook_apply_btns.append(btn)
 
         # Suggestions / log
@@ -725,7 +745,10 @@ class DiceCalculatorApp:
                 die_name = getattr(self.playbook_current_dice[i], 'name', None)
             except Exception:
                 die_name = None
-            label_text = die_name if die_name else f"Die {i+1}"
+            if die_name:
+                label_text = f"{die_name} (D{i+1})"
+            else:
+                label_text = f"Die {i+1} (D{i+1})"
             ttk.Label(self.playbook_roll_frame, text=label_text).grid(row=0, column=i*2, sticky="e")
             # Default to 1 to avoid empty values causing parse errors
             var = tk.StringVar(value="1")
